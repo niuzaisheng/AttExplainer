@@ -1,4 +1,3 @@
-# %%
 # Explainable baseline method captum
 # You need install captum package first by following cmd:
 #   pip install captum
@@ -74,7 +73,6 @@ device = torch.device("cuda", config.gpu_index)
 transformer_model.eval()
 transformer_model = send_to_device(transformer_model, device)
 
-# %%
 game_step = 0
 
 # To solve the problems posed by secial tokens
@@ -207,8 +205,6 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
 
     game_step = 0
 
-
-# %%
 
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num

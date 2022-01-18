@@ -1,4 +1,3 @@
-# %%
 # Explainable baseline method LIME
 # You need install lime package first by following cmd:
 #   pip install lime
@@ -74,7 +73,7 @@ device = torch.device("cuda", config.gpu_index)
 transformer_model.eval()
 transformer_model = send_to_device(transformer_model, device)
 
-# %%
+
 game_step = 0
 # To solve the problems posed by secial tokens
 valid_ids_map = {}  # valid_token_position: input_token_position
@@ -229,7 +228,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
     valid_ids_map={}
 
 
-# %%
+
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num
 reslut["Attack Success Rate"] = attack_successful_num / all_eval_example_num
