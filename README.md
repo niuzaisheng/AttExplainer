@@ -1,6 +1,6 @@
 # AttExplainer
 
-Code for "AttExplainer: Explain Transformer Attention by ReinforcementLearning".
+Code for "AttExplainer:  Explain Transformer via Attention by Reinforcement Learning".
 
 First installation of the relevant package.
 
