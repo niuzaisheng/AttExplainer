@@ -142,19 +142,7 @@ def batch_loss(model_output, y_ref, num_labels, device=None):
     if device is not None:
         loss = loss.to(device)
     return loss
-
-
-def instance_accuracy(problem_type, y_true, y_pred):
-    if problem_type == "single_label_classification":
-        instance_accuracy = (y_true == y_pred).float()
-    elif problem_type == "multi_label_classification":
-        # compute true positives using the logical AND operator
-        numerator = torch.sum(torch.logical_and(y_true, y_pred), axis=1)
-        # compute true_positive + false negatives + false positive using the logical OR operator
-        denominator = torch.sum(torch.logical_or(y_true, y_pred), axis=1) + 0.01
-        instance_accuracy = numerator/denominator
-    return instance_accuracy
-
+    
 
 def batch_accuracy(model_output, y_ref=None, device=None):
     y_pred = model_output.logits.detach().argmax(1).unsqueeze(-1)
