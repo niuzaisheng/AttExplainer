@@ -210,6 +210,15 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         dataset = load_dataset("glue", config.data_set_name)
         dataset = dataset.remove_columns(["idx"])
         train_dataset = dataset["train"]
+
+        # print("## before filiter length", len(train_dataset))
+        # def length_filter(exmaple):
+        #     text = exmaple[text_col_name]
+        #     tokens = text.split(" ")
+        #     return len(tokens)>5
+        # train_dataset = train_dataset.filter(length_filter)
+        # print("## after filiter length", len(train_dataset))
+
         eval_dataset = dataset["validation"]
 
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)

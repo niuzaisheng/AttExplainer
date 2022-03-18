@@ -1,6 +1,6 @@
 # AttExplainer
 
-Code for "AttExplainer:  Explain Transformer via Attention by Reinforcement Learning".
+Code for "AttExplainer: Explain Transformer via Attention by Reinforcement Learning".
 
 First installation of the relevant package.
 
@@ -12,8 +12,9 @@ If you want, complete the login operation in your shell. Enter the following com
 
     wandb login
 
-API keys can be found in User Settings page https://wandb.ai/settings .
-For more information you can refer to https://docs.wandb.ai/quickstart .
+API keys can be found in User Settings page https://wandb.ai/settings. For more information you can refer to https://docs.wandb.ai/quickstart .
+
+If you want to run without logining wandb account, you can set the environment variable `WANDB_MODE=offline` to save the metrics locally, no internet required.
 
 All scripts have a parameter named `data_set_name`, please select one from `emotion`, `snli` or `sst2`.
 
@@ -23,6 +24,7 @@ Next is how to replicat all experiments:
 
 If use default training config:
 
+    mkidr saved_weights
     python run_train_explain.py --data_set_name emotion
 
 Other settings can be found in `run_train_explain.py`
@@ -35,7 +37,7 @@ Other settings can be found in `run_train_explain.py`
 
 - sst2
 
-    python analysis_explain.py --data_set_name sst2 --dqn_weights_path report_weights/sst2_explainer_460000.bin
+    python analysis_explain.py --data_set_name sst2 --done_threshold 0.7 --dqn_weights_path report_weights/sst2_explainer_460000.bin
 
 - snli
 
@@ -46,6 +48,7 @@ Other settings can be found in `run_train_explain.py`
 
 If use default training config:
 
+    mkidr saved_weights
     python run_train_attack.py --data_set_name emotion
 
 Other settings can be found in `run_train_attack.py`

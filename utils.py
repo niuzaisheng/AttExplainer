@@ -27,9 +27,6 @@ def gather_correct_examples(original_acc: Tensor,
                             original_loss: Tensor,
                             original_pred_labels: Tensor,
                             original_prob: Tensor = None,
-                            empty_loss: Tensor = None,
-                            empty_pred_labels: Tensor = None,
-                            empty_prob: Tensor = None,
                             ):
 
     left_index = [i for i in range(simulate_batch_size) if original_acc[i].item() == 1]
@@ -45,12 +42,9 @@ def gather_correct_examples(original_acc: Tensor,
     left_original_loss = original_loss[left_index]
     left_original_pred_labels = original_pred_labels[left_index]
     left_original_prob = original_prob[left_index]
-    left_empty_loss = empty_loss[left_index]
-    left_empty_pred_labels = empty_pred_labels[left_index]
-    left_empty_prob = empty_prob[left_index]
 
     return len(left_index), left_seq_length, left_special_tokens_mask, left_simulate_batch, \
-        left_original_loss, left_original_acc, left_original_pred_labels, left_original_prob, left_empty_loss, left_empty_pred_labels, left_empty_prob
+        left_original_loss, left_original_acc, left_original_pred_labels, left_original_prob
 
 
 def display_ids(input_ids, tokenizer, name):
@@ -138,22 +132,41 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
 
 def batch_loss(model_output, y_ref, num_labels, device=None):
     loss_fct = nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(model_output.logits.view(-1, num_labels), y_ref.view(-1)).detach()
+    loss = loss_fct(model_output.logits.view(-1, num_labels).to(device), y_ref.to(device).view(-1)).detach()
     if device is not None:
         loss = loss.to(device)
     return loss
-    
 
-def batch_accuracy(model_output, y_ref=None, device=None):
+def batch_initial_prob(model_output, y_ref, device=None):
+    """
+        Note here that, in initial state: 
+        - `y_ref` is refer to `golden_label`.
+        - `y_pred` is obtained by the model's predicted label at this point, 
+          which is used as `original_pred_labels` in future game process.
+        - And `prob` is used as `original_prob` for compute \Delta p,  `\Delta p = original_prob - post_prob`.
+          The `prob` here not referes to the probility of `y_ref`, but referes to the probility of `y_pred`.
+    """
     y_pred = model_output.logits.detach().argmax(1).unsqueeze(-1)
-    if y_ref is None:
-        y_ref = y_pred
-    else:
-        y_ref = y_ref.to(y_pred.device)
+    prob = torch.softmax(model_output.logits.detach(), dim=-1)
+    prob = torch.gather(prob, 1, y_pred).reshape(-1)
+    y_ref = y_ref.to(y_pred.device)
+    accuracy = (y_ref == y_pred).float().reshape(-1)
+    if device is not None:
+        accuracy = accuracy.to(device)
+        y_pred = y_pred.to(device)
+        prob = prob.to(device)
+    return accuracy, y_pred, prob
+
+def batch_accuracy(model_output, y_ref, device=None):
+    """
+        Note here that, in the game process, `y_ref` is `original_pred_labels`.
+        So we are interested in the probability change of the `original_pred_labels` label.
+    """
+    y_pred = model_output.logits.detach().argmax(1).unsqueeze(-1)
+    y_ref = y_ref.to(y_pred.device)
     prob = torch.softmax(model_output.logits.detach(), dim=-1)
     prob = torch.gather(prob, 1, y_ref).reshape(-1)
     accuracy = (y_ref == y_pred).float().reshape(-1)
-   
     if device is not None:
         accuracy = accuracy.to(device)
         y_pred = y_pred.to(device)
@@ -176,7 +189,7 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
 
 def compute_fidelity(original_model, finished_index, simulate_batch, special_tokens_mask,
                      game_status, original_pred_labels, lm_device, mask_token_id=103):
-    # Compute fidelity+ and fidelity-
+    # Compute fidelity
 
     fidelity_plus_batch = {}
     fidelity_minus_batch = {}
