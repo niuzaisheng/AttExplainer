@@ -138,6 +138,7 @@ all_musked_word_rate = []
 all_unmusk_token_rate = []
 all_done_game_step = []  # Average Victim Model Query Times
 all_delta_prob = []
+all_cumulative_rewards = []
 
 all_game_step_done_num = defaultdict(list)  # success rate in each game_step
 all_game_step_mask_rate = defaultdict(list)  # token mask rate in each game_step
@@ -169,7 +170,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         original_outputs = transformer_model(**simulate_batch, output_attentions=True)
         empty_outputs = transformer_model(**empty_batch, output_attentions=True)
 
-    original_acc, original_pred_labels, original_prob = batch_accuracy(original_outputs, simulate_batch["label"], device=dqn.device)
+    original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
     original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
     simulate_batch_size = len(seq_length)
@@ -200,6 +201,11 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         rewards, ifdone, musked_token_rate, unmusk_token_rate, musked_token_num, unmusk_token_num = get_rewards(seq_length,
                                                                                                                 original_acc, original_loss, original_prob,
                                                                                                                 post_acc, post_loss, post_prob, now_game_status, game_step)
+        
+        if cumulative_rewards is None:
+            cumulative_rewards = rewards
+        else:
+            cumulative_rewards += rewards
 
         # Remove those completed samples
         next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_attentions, \
@@ -247,10 +253,9 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         seq_length = next_seq_length
         special_tokens_mask = next_special_tokens_mask
         all_attentions = next_attentions
-        game_status = next_game_status
+        last_game_status = next_game_status
         simulate_batch = next_simulate_batch
         original_loss, original_acc, original_pred_labels, original_prob = next_original_loss, next_original_acc, next_original_pred_labels, next_original_prob
-        empty_loss = next_empty_loss
         token_word_position_map = next_token_word_position_map
         cumulative_rewards = next_cumulative_rewards
 
@@ -270,7 +275,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         all_musked_token_rate.extend(musked_token_rate.tolist())
         all_unmusk_token_rate.extend(unmusk_token_rate.tolist())
 
-        word_masked_rate = get_word_masked_rate(game_status, seq_length, token_word_position_map)
+        word_masked_rate = get_word_masked_rate(next_game_status, seq_length, token_word_position_map)
         all_musked_word_rate.extend(word_masked_rate)
 
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)

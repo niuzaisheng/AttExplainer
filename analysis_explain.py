@@ -165,16 +165,14 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
     special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
     token_word_position_map = simulate_batch.pop("token_word_position_map")
     simulate_batch = send_to_device(simulate_batch, lm_device)
-    empty_batch = get_empty_batch(simulate_batch, special_tokens_mask, mask_token_id=MASK_TOKEN_ID)
 
     with torch.no_grad():
         original_outputs = transformer_model(**simulate_batch, output_attentions=True)
 
-    original_acc, original_pred_labels, original_prob = batch_accuracy(original_outputs, simulate_batch["labels"], device=dqn.device)
+    original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
     original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
     simulate_batch_size = len(seq_length)
-
     simulate_batch_size_at_start = len(seq_length)
     all_eval_token_length.extend(seq_length)
     all_eval_example_num += len(seq_length)
@@ -241,9 +239,9 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
             # fidelity
             finished_index = removed_index
-            all_fidelity_acc, fidelity_minus_acc = compute_fidelity(transformer_model, finished_index, simulate_batch,
-                                                                    special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
-            all_fidelity.extend(all_fidelity_acc.tolist())
+            fidelity_acc, _ = compute_fidelity(transformer_model, finished_index, simulate_batch,
+                                               special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+            all_fidelity.extend(fidelity_acc.tolist())
 
             # delta_prob
             all_delta_prob.extend(delta_p[removed_index].tolist())
@@ -274,7 +272,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         completed_steps += 1
 
     if simulate_batch_size != 0:
-        # No successful samples
+        # Not successful samples
         unfinished_index = [i for i in range(simulate_batch_size)]
 
         all_delta_prob.extend(delta_p.tolist())
@@ -283,12 +281,14 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         word_masked_rate = get_word_masked_rate(next_game_status, seq_length, token_word_position_map)
         all_musked_word_rate.extend(word_masked_rate)
 
-        all_fidelity_acc, _ = compute_fidelity(transformer_model, unfinished_index, simulate_batch,
-                                                                special_tokens_mask, next_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
-        all_fidelity.extend(all_fidelity_acc.tolist())
+        fidelity_acc, _ = compute_fidelity(transformer_model, unfinished_index, simulate_batch,
+                                           special_tokens_mask, next_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+        all_fidelity.extend(fidelity_acc.tolist())
 
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
+print(attack_example_num, len(all_delta_prob), len(all_musked_token_rate), len(all_unmusked_token_rate), len(all_musked_word_rate))
+# assert attack_example_num == len(all_delta_prob) == len(all_musked_token_rate) == len(all_unmusked_token_rate) == len(all_musked_word_rate)
 
 print("Finish eval!")
 

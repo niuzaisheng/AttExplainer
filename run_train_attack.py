@@ -132,7 +132,7 @@ def get_rewards(seq_length, original_loss, original_prob, post_acc, post_loss, p
     post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
 
     return post_rewards, ifdone, musked_token_rate, unmusked_token_rate
-
+    
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, use_random_matrix=False):
 
@@ -143,8 +143,8 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
             post_attention = get_random_attention_features(post_outputs, config.bins_num)
         else:
             post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
-        post_acc, post_pred_labels, post_prob = batch_accuracy(problem_type, post_batch["labels"], post_outputs, device=dqn_device,
-                                                               return_prob=True, y_ref=original_pred_labels)
+        post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
+
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
     all_attentions = post_attention.unsqueeze(1)
@@ -153,7 +153,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
 
 dqn = DQN(config, mask_token_id=MASK_TOKEN_ID)
-progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader) * config.game_steps, disable=config.disable_tqdm)
+progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader) * config.max_game_steps, disable=config.disable_tqdm)
 exp_name = "simulate"
 
 lm_device = torch.device("cuda", config.gpu_index)
@@ -167,6 +167,7 @@ for epoch in range(config.max_train_epoch):
     for simulate_step, simulate_batch in enumerate(simulate_dataloader):
         seq_length = simulate_batch.pop("seq_length")
         batch_max_seq_length = max(seq_length)
+        golden_labels = simulate_batch.pop("labels")
         special_tokens_mask = simulate_batch.pop("special_tokens_mask").bool()
         special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
         token_word_position_map = simulate_batch.pop("token_word_position_map")
@@ -175,8 +176,10 @@ for epoch in range(config.max_train_epoch):
         with torch.no_grad():
             original_outputs = transformer_model(**simulate_batch, output_attentions=True)
 
-        original_acc, original_pred_labels, original_prob = batch_accuracy(simulate_batch["labels"], original_outputs, device=dqn.device)
+        original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
+
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
+
         update_dict(exp_name, progress_bar, {"original_acc": original_acc.mean().item(), "original_loss": original_loss.mean().item(),}, completed_steps)
 
         simulate_batch_size = len(seq_length)
@@ -199,8 +202,9 @@ for epoch in range(config.max_train_epoch):
             post_batch, actions, now_game_status = dqn.choose_action(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
             next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                          lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
-            rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_acc, original_loss, original_prob,
+            rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_loss, original_prob,
                                                                                   post_acc, post_loss, post_prob, now_game_status, game_step)
+
             dqn.store_transition(simulate_batch_size, all_attentions, next_attentions, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
             
             if cumulative_rewards is None:
@@ -224,9 +228,9 @@ for epoch in range(config.max_train_epoch):
                 if completed_steps % 10 == 0:
                     update_dict(exp_name, progress_bar, {
                         "done_rewards": rewards[removed_index].mean().item(),
-                        "done_musked_token_rate": musked_token_rate_list[removed_index].mean().item(),
-                        "done_unmusked_token_rate": unmusked_token_rate_list[removed_index].mean().item(),
-                        "done_cumulative_rewards"cumulative_rewards[removed_index].mean().item(),
+                        "done_musked_token_rate": musked_token_rate[removed_index].mean().item(),
+                        "done_unmusked_token_rate": unmusked_token_rate[removed_index].mean().item(),
+                        "done_cumulative_rewards": cumulative_rewards[removed_index].mean().item(),
                         "game_step": game_step,
                     }, step=completed_steps)
 

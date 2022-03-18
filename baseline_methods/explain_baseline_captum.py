@@ -29,6 +29,7 @@ def parse_args():
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion, snli or sst2."
     )
     parser.add_argument("--explain_method", type=str, default=0, help="One of FeatureAblation, Occlusion, KernelShap, ShapleyValueSampling")
+    parser.add_argument("--max_sample_num", type=int, default=100)
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=8)
@@ -100,7 +101,8 @@ def predict(inputs, token_type_ids=None, attention_mask=None, position=0, add_ga
     global game_step
     if add_game_step:
         game_step += 1
-    output = transformer_model(inputs, token_type_ids=token_type_ids, attention_mask=attention_mask, )
+    with torch.no_grad():
+        output = transformer_model(inputs, token_type_ids=token_type_ids, attention_mask=attention_mask, )
     return output.logits
 
 if config.explain_method == "FeatureAblation":
@@ -157,7 +159,8 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
         summarize_res = lig.attribute(inputs=input_ids,
                                         baselines=ref_input_ids,
                                         target=original_pred_label,
-                                        n_samples=100,
+                                        n_samples=config.max_sample_num,
+                                        perturbations_per_eval = 16,
                                         additional_forward_args=(token_type_ids, attention_mask, 0))
 
 
@@ -212,7 +215,7 @@ reslut["Attack Success Rate"] = attack_successful_num / all_eval_example_num
 reslut["Token Modification Rate"] = np.mean(all_musked_word_rate)
 reslut["Token Left Rate"] = np.mean(all_unmusked_token_rate)
 reslut["Average Victim Model Query Times"] = np.mean(all_done_game_step)
-reslut["Fidelity+"] = np.mean(all_fidelity)
+reslut["Fidelity"] = np.mean(all_fidelity)
 reslut["delta_prob"] = np.mean(all_delta_prob)
 
 logger.info(f"Result")

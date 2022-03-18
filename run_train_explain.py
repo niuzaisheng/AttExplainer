@@ -126,6 +126,7 @@ def save_result(save_batch_size, completed_steps, original_input_ids, post_input
 def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, game_step):
 
     seq_length = torch.FloatTensor(seq_length) - token_quantity_correction
+    seq_length = seq_length.to(game_status.device)
     unmusk_token_num = game_status.sum(dim=1) - token_quantity_correction
     unmusked_token_rate = unmusk_token_num / seq_length
     musked_token_num = seq_length - unmusk_token_num
@@ -155,7 +156,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
 
 dqn = DQN(config, mask_token_id=MASK_TOKEN_ID)
-progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader) * config.game_steps, disable=config.disable_tqdm)
+progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader) * config.max_game_steps, disable=config.disable_tqdm)
 exp_name = "simulate"
 
 lm_device = torch.device("cuda", config.gpu_index)
@@ -179,7 +180,7 @@ for epoch in range(config.max_train_epoch):
         with torch.no_grad():
             original_outputs = transformer_model(**simulate_batch)
 
-        original_acc, original_pred_labels, original_prob = batch_accuracy(original_outputs, simulate_batch["labels"], device=dqn.device)
+        original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
         update_dict(exp_name, progress_bar, {"original_prob": original_prob.mean().item()}, completed_steps)
@@ -231,7 +232,7 @@ for epoch in range(config.max_train_epoch):
                         "done_unmusked_token_rate": unmusked_token_rate[removed_index].mean().item(),
                         "done_delta_p": delta_p[removed_index].mean().item(),
                         "done_fidelity_plus": fidelity_plus.mean().item(),
-                        "done_cumulative_rewards"cumulative_rewards[removed_index].mean().item(),
+                        "done_cumulative_rewards": cumulative_rewards[removed_index].mean().item(),
                         "game_step": game_step,
                     }, step=completed_steps)
 
