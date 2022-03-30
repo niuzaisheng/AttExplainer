@@ -2,9 +2,11 @@
 
 Code for "AttExplainer: Explain Transformer via Attention by Reinforcement Learning".
 
-First installation of the relevant package.
+First installation of the relevant package and add a sub-module.
 
+    cd AttExplainer
     pip install -r requirements.txt
+    git clone https://github.com/niuzaisheng/per.git
 
 Before you start we strongly recommend that you register a `wandb` account.
 This will record graphs and curves during the experiment.
