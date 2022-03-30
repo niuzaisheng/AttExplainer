@@ -26,7 +26,7 @@ Next is how to replicat all experiments:
 
 If use default training config:
 
-    mkidr saved_weights
+    mkdir saved_weights
     python run_train_explain.py --data_set_name emotion
 
 Other settings can be found in `run_train_explain.py`
@@ -50,7 +50,7 @@ Other settings can be found in `run_train_explain.py`
 
 If use default training config:
 
-    mkidr saved_weights
+    mkdir saved_weights
     python run_train_attack.py --data_set_name emotion
 
 Other settings can be found in `run_train_attack.py`
