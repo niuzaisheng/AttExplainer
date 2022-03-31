@@ -4,6 +4,8 @@ import sys
 import logging
 import argparse
 from collections import defaultdict
+import datetime
+
 import torch
 import numpy as np
 from tqdm.auto import tqdm
@@ -35,7 +37,7 @@ def parse_args():
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
     parser.add_argument("--use_wandb", type=bool, default=True)
-    parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
+    parser.add_argument("--wandb_project_name", type=str, default="attexplaner_conv")
     parser.add_argument("--disable_tqdm", type=bool, default=False)
     parser.add_argument("--discribe", type=str, default="Model attack evaluation process")
 
@@ -53,6 +55,9 @@ logging.basicConfig(
 
 logger.info(f"Eval config: {config}")
 
+dt = datetime.datetime.now().strftime("%Y-%m-%d-%I-%M-%S")
+exp_name = f"analysis_{config.data_set_name}_{dt}"
+
 lm_device = torch.device("cuda", config.gpu_index)
 
 dataset_config = get_dataset_config(config)
@@ -67,8 +72,7 @@ else:
 
 if config.use_wandb:
     import wandb
-    wandb.init(project=config.wandb_project_name, config=config)
-    wandb_config = wandb.config
+    wandb.init(name=exp_name, project=config.wandb_project_name, config=config)
     table_columns = ["completed_steps", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 
@@ -76,9 +80,9 @@ tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
 MASK_TOKEN_ID = tokenizer.mask_token_id
 
 
-print("Start loading!")
+logger.info("Start loading!")
 transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_model(config, dataset_config, tokenizer)
-print("Finish loading!")
+logger.info("Finish loading!")
 
 
 def save_result(save_batch_size, completed_steps, original_input_ids, post_input_ids, gold_label, original_pred_labels, post_pred_labels, tokenizer, wandb_result_table):
@@ -113,21 +117,20 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
     post_batch = send_to_device(post_batch, lm_device)
     with torch.no_grad():
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        if use_random_matrix:
-            post_attention = get_random_attention_features(post_outputs, config.bins_num)
-        else:
-            post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+        # if use_random_matrix:
+        #     post_attention = get_random_attention_features(post_outputs, config.bins_num)
+        # else:
+        #     post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+        post_attention = get_raw_attention_features(post_outputs)
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
-    all_attentions = post_attention.unsqueeze(1)
-
+    all_attentions = post_attention
     return all_attentions, post_acc, post_loss, post_prob, post_pred_labels
 
 
 dqn = DQN_eval(config, MASK_TOKEN_ID)
 
-exp_name = "eval"
 completed_steps = 0
 
 # Metrics
@@ -280,7 +283,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
-print("Finish eval!")
+logger.info("Finish eval!")
 
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num

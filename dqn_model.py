@@ -67,8 +67,8 @@ class DQNNet(nn.Module):
         xx = self.down_conv_x(x) # [B, 128, seq, ?]
         xy = self.down_conv_y(x) # [B, 128, ?, seq]
         x = torch.cat([xx, xy.transpose(-1,-2)], dim = -1) # [B, 128, seq, ?]
-        x = x.mean(-1) # average pooling
-        # x, _ = x.max(-1) # max pooling
+        # x = x.mean(-1) # average pooling
+        x, _ = x.max(-1) # max pooling
         x = torch.cat([x, s.unsqueeze(1)], dim=1) # [B, 129, seq]
         x = x.transpose(1,2) # [B, seq, 129]
         v = self.out(x).squeeze(-1) # [B, seq]
@@ -274,10 +274,10 @@ class DQN_eval(object):
     def __init__(self, config, mask_token_id=103):
 
         self.device = torch.device("cpu")
-        self.eval_net = DQNNet(config)
+        self.eval_net = DQNNet()
         self.mask_token_id = mask_token_id
         with open(config.dqn_weights_path, "rb") as f:
-            self.eval_net.load_state_dict(torch.load(f,map_location='cpu'))
+            self.eval_net.load_state_dict(torch.load(f, map_location='cpu'))
             
 
     def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, all_attentions, game_status):
