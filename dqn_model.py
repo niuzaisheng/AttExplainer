@@ -69,6 +69,7 @@ class DQNNet(nn.Module):
 
         return v + (adv - adv_mean)
 
+
 def gather2D(tensors: List[Tensor]):
     out_dict = {}
     first = tensors[0]

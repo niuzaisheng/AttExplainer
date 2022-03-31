@@ -45,7 +45,7 @@ def parse_args():
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--max_train_epoch", type=int, default=100)
-    parser.add_argument("--save_step_iter", type=int, default=1000)
+    parser.add_argument("--save_step_iter", type=int, default=10000)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
     parser.add_argument("--use_wandb", type=bool, default=True)
