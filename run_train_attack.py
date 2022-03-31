@@ -29,7 +29,6 @@ def parse_args():
     )
 
     # Dqn Settings
-    parser.add_argument("--bins_num", type=int, default=32)
     parser.add_argument("--max_memory_capacity", type=int, default=1000)
     parser.add_argument("--dqn_rl", type=float, default=0.0001)
     parser.add_argument("--target_replace_iter", type=int, default=100)
@@ -144,9 +143,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
         # else:
         #     post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
         post_attention = get_raw_attention_features(post_outputs)
-
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
-
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
     all_attentions = post_attention

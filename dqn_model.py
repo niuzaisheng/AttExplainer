@@ -21,11 +21,7 @@ class DQNNet(nn.Module):
         self.channel_mix = nn.Conv2d(in_channels=12*12, out_channels=64, kernel_size=1, stride=1, padding=1)
 
         self.down_conv_x = nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=48, kernel_size=5, stride=(1, 2), padding=1),
-            nn.BatchNorm2d(num_features=48),
-            nn.ReLU(),
-
-            nn.Conv2d(in_channels=48, out_channels=128, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(1, 2), padding=1),
             nn.BatchNorm2d(num_features=128),
             nn.ReLU(),
             
@@ -35,14 +31,10 @@ class DQNNet(nn.Module):
         )
 
         self.down_conv_y = nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=48, kernel_size=5, stride=(2, 1), padding=1),
-            nn.BatchNorm2d(num_features=48),
-            nn.ReLU(),
-
-            nn.Conv2d(in_channels=48, out_channels=128, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(2, 1), padding=1),
             nn.BatchNorm2d(num_features=128),
             nn.ReLU(),
-            
+
             nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(num_features=128),
             nn.ReLU(),
@@ -67,8 +59,8 @@ class DQNNet(nn.Module):
         xx = self.down_conv_x(x) # [B, 128, seq, ?]
         xy = self.down_conv_y(x) # [B, 128, ?, seq]
         x = torch.cat([xx, xy.transpose(-1,-2)], dim = -1) # [B, 128, seq, ?]
-        # x = x.mean(-1) # average pooling
-        x, _ = x.max(-1) # max pooling
+        x = x.mean(-1) # average pooling
+        # x, _ = x.max(-1) # max pooling
         x = torch.cat([x, s.unsqueeze(1)], dim=1) # [B, 129, seq]
         x = x.transpose(1,2) # [B, seq, 129]
         v = self.out(x).squeeze(-1) # [B, seq]
