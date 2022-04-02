@@ -81,9 +81,10 @@ def get_random_attention_features(model_outputs, bins_num):
     return torch.rand((batch_size, max_seq_len, 2 * bins_num + 4), device=target_device)
 
 def get_raw_attention_features(model_outputs):
-    batch_attentions = model_outputs.attentions # Tensor[Batch, head, seq_len, seq_len] * layer_num 
+    batch_attentions = model_outputs.attentions# Tensor[Batch, head, seq_len, seq_len] * layer_num 
     attentions = torch.cat(batch_attentions, dim=1) # Tensor[Batch x (head*layer_num) x seq_len x seq_len]
-    return attentions
+    return attentions.detach()
+
 
 def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_num):
     batch_attentions = model_outputs.attentions

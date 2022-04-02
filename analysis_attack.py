@@ -29,17 +29,17 @@ def parse_args():
     parser.add_argument(
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
     )
-    parser.add_argument("--bins_num", type=int, default=32)
     parser.add_argument("--use_random_matrix", type=bool, default=False)
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
-    parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner_conv")
     parser.add_argument("--disable_tqdm", type=bool, default=False)
     parser.add_argument("--discribe", type=str, default="Model attack evaluation process")
+    parser.add_argument("--pooling_method", type=str, default="AdaptiveAvgPool")
 
     args = parser.parse_args()
     return args
@@ -112,7 +112,7 @@ def get_rewards(seq_length, original_acc, original_loss, original_prob, post_acc
     return post_rewards, ifdone, musked_token_rate, unmusk_token_rate, musked_token_num, unmusk_token_num
 
 
-def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, use_random_matrix=False):
+def one_step(transformer_model, original_pred_labels, post_batch, seq_length, lm_device, dqn_device, use_random_matrix=False):
 
     post_batch = send_to_device(post_batch, lm_device)
     with torch.no_grad():
@@ -190,7 +190,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
     # initial batch
     post_batch, actions, last_game_status, action_value = dqn.initial_action(simulate_batch, special_tokens_mask, seq_length, batch_max_seq_length, lm_device)
-    all_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
+    all_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length,
                                                                                 lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
     for game_step in range(epoch_game_steps):
         game_step_progress_bar.update()
@@ -198,7 +198,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         all_game_step_done_num[game_step].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
         post_batch, actions, now_game_status, action_value = dqn.choose_action_for_eval(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
-        next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
+        next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length,
                                                                                      lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
 
         rewards, ifdone, musked_token_rate, unmusk_token_rate, musked_token_num, unmusk_token_num = get_rewards(seq_length,

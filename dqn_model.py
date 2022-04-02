@@ -13,35 +13,100 @@ from per.prioritized_memory import Memory
 from torch.nn.utils.rnn import pad_sequence
 
 
-class DQNNet(nn.Module):
+# class DQNNet(nn.Module):
+#     """方案2"""
 
-    def __init__(self):
+#     def __init__(self, config):
+#         super().__init__()
+
+#         self.channel_mix = nn.Conv2d(in_channels=12*12, out_channels=64, kernel_size=1, stride=1, padding=1)
+
+#         self.down_conv_x = nn.Sequential(
+#             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(1, 2), padding=1),
+#             nn.BatchNorm2d(num_features=128),
+#             nn.ReLU(),
+            
+#             nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm2d(num_features=128),
+#             nn.ReLU(),
+#         )
+
+#         self.down_conv_y = nn.Sequential(
+#             nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(2, 1), padding=1),
+#             nn.BatchNorm2d(num_features=128),
+#             nn.ReLU(),
+
+#             nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
+#             nn.BatchNorm2d(num_features=128),
+#             nn.ReLU(),
+#         )
+
+#         self.out = nn.Linear(128+1, 1)
+#         self.dueling = nn.Linear(128+1, 1)
+
+#     def forward(self, x, s, seq_length):
+#         """_summary_
+
+#         Args:
+#             x (Tensor): attention matrix with size of [Batch x (head*layer_num) x seq_len x seq_len]
+#             s (Tensor): game status with size of [Batch x seq_len]
+
+#         Returns:
+#             Tensor: Q value
+#         """
+#         batch_size, matrix_num, max_seq_len, _ = x.size()
+
+#         x = self.channel_mix(x) # [B, 64, seq, seq]
+#         xx = self.down_conv_x(x) # [B, 128, seq, ?]
+#         xy = self.down_conv_y(x) # [B, 128, ?, seq]
+#         x = torch.cat([xx, xy.transpose(-1,-2)], dim = -1) # [B, 128, seq, ?]
+#         x = x.mean(-1) # average pooling
+#         # x, _ = x.max(-1) # max pooling
+#         x = torch.cat([x, s.unsqueeze(1)], dim=1) # [B, 129, seq]
+#         x = x.transpose(1,2) # [B, seq, 129]
+#         v = self.out(x).squeeze(-1) # [B, seq]
+#         adv = self.dueling(x).squeeze(-1) # [B, seq]
+#         adv_mean = adv.mean(1, keepdim=True) # [B, 1]
+
+#         return v + (adv - adv_mean)
+
+
+class DQNNet(nn.Module):
+    """方案3"""
+
+    def __init__(self,config):
         super().__init__()
+        self.pooling_method = config.pooling_method
+        if self.pooling_method == "AdaptiveAvgPool":
+            self.pooling = nn.AdaptiveAvgPool2d((None,1))
+        elif self.pooling_method == "AdaptiveMaxPool":
+            self.pooling = nn.AdaptiveMaxPool2d((None,1))
 
         self.channel_mix = nn.Conv2d(in_channels=12*12, out_channels=64, kernel_size=1, stride=1, padding=1)
 
         self.down_conv_x = nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(1, 2), padding=1),
-            nn.BatchNorm2d(num_features=128),
+            nn.Conv2d(in_channels=64, out_channels=32, kernel_size=5, stride=(1, 2), padding=1),
+            nn.BatchNorm2d(num_features=32),
             nn.ReLU(),
             
-            nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(num_features=128),
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(num_features=32),
             nn.ReLU(),
         )
 
         self.down_conv_y = nn.Sequential(
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=5, stride=(2, 1), padding=1),
-            nn.BatchNorm2d(num_features=128),
+            nn.Conv2d(in_channels=64, out_channels=32, kernel_size=5, stride=(2, 1), padding=1),
+            nn.BatchNorm2d(num_features=32),
             nn.ReLU(),
 
-            nn.Conv2d(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(num_features=128),
+            nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(num_features=32),
             nn.ReLU(),
         )
 
-        self.out = nn.Linear(128+1, 1)
-        self.dueling = nn.Linear(128+1, 1)
+        dim = 16*2+1
+        self.out = nn.Linear(dim, 1)
+        self.dueling = nn.Linear(dim, 1)
 
     def forward(self, x, s, seq_length):
         """_summary_
@@ -56,19 +121,18 @@ class DQNNet(nn.Module):
         batch_size, matrix_num, max_seq_len, _ = x.size()
 
         x = self.channel_mix(x) # [B, 64, seq, seq]
-        xx = self.down_conv_x(x) # [B, 128, seq, ?]
-        xy = self.down_conv_y(x) # [B, 128, ?, seq]
-        x = torch.cat([xx, xy.transpose(-1,-2)], dim = -1) # [B, 128, seq, ?]
-        x = x.mean(-1) # average pooling
-        # x, _ = x.max(-1) # max pooling
-        x = torch.cat([x, s.unsqueeze(1)], dim=1) # [B, 129, seq]
-        x = x.transpose(1,2) # [B, seq, 129]
+        xx = self.down_conv_x(x) # [B, 32, seq, ?]
+        xy = self.down_conv_y(x) # [B, 32, ?, seq]
+        x = torch.cat([xx, xy.transpose(-1,-2)], dim = -1) # [B, 32, seq, ?]
+        x = self.pooling(x)
+        x = x.squeeze(-1)
+        x = torch.cat([x, s.unsqueeze(1)], dim=1) # [B, 33, seq]
+        x = x.transpose(1,2) # [B, seq, dim]
         v = self.out(x).squeeze(-1) # [B, seq]
         adv = self.dueling(x).squeeze(-1) # [B, seq]
         adv_mean = adv.mean(1, keepdim=True) # [B, 1]
 
         return v + (adv - adv_mean)
-
 
 def gather2D(tensors: List[Tensor]):
     out_dict = {}
@@ -104,11 +168,10 @@ class DQN(object):
     def __init__(self, config, mask_token_id=103):
 
         self.device = torch.device("cuda", config.gpu_index)
-        # self.device = torch.device("cpu")
         self.mask_token_id = mask_token_id
 
-        self.eval_net = DQNNet()
-        self.target_net = DQNNet()
+        self.eval_net = DQNNet(config)
+        self.target_net = DQNNet(config)
         self.target_net.load_state_dict(self.eval_net.state_dict())
         self.optimizer = optim.Adam(self.eval_net.parameters(), lr=config.dqn_rl)
 
@@ -266,20 +329,20 @@ class DQN_eval(object):
 
     def __init__(self, config, mask_token_id=103):
 
-        self.device = torch.device("cpu")
-        self.eval_net = DQNNet()
+        self.device = torch.device("cpu", config.gpu_index)
+        # self.device = torch.device("cuda", config.gpu_index)
+        self.eval_net = DQNNet(config)
         self.mask_token_id = mask_token_id
         with open(config.dqn_weights_path, "rb") as f:
-            self.eval_net.load_state_dict(torch.load(f, map_location='cpu'))
-            
+            self.eval_net.load_state_dict(torch.load(f, map_location="cpu"))
+        self.eval_net = send_to_device(self.eval_net, self.device)
 
     def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, all_attentions, game_status):
         target_device = batch["input_ids"].device
-        batch_size, _, seq_len, _ = all_attentions.size()
         self.eval_net.eval()
         all_attentions = send_to_device(all_attentions, self.device)
         with torch.no_grad():
-            actions = self.eval_net(all_attentions, game_status, batch_seq_length).detach()
+            actions = self.eval_net(all_attentions, game_status.to(self.device), batch_seq_length).detach()
         actions = actions.masked_fill(special_tokens_mask, -np.inf)
         select_action = torch.argmax(actions, dim=1)  # [B, seq_len]
 
