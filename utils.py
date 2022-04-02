@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from accelerate.utils import send_to_device
 from torch import Tensor
 
+from torch.distributions.categorical import Categorical
 
 def get_attention(model_outputs, layer_sets=None):
     batch_attentions = model_outputs.attentions
@@ -85,6 +86,10 @@ def get_raw_attention_features(model_outputs):
     attentions = torch.cat(batch_attentions, dim=1) # Tensor[Batch x (head*layer_num) x seq_len x seq_len]
     return attentions.detach()
 
+def get_entropy_features(model_outputs):
+    c = Categorical(logits = model_outputs.logits)
+
+    return c.entropy()
 
 def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_num):
     batch_attentions = model_outputs.attentions

@@ -139,11 +139,9 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, lm
     post_batch = send_to_device(post_batch, lm_device)
     with torch.no_grad():
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        # if use_random_matrix:
-        #     post_attention = get_random_attention_features(post_outputs, config.bins_num)
-        # else:
-        #     post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+
         post_attention = get_raw_attention_features(post_outputs)
+        
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
