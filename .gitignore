@@ -1,6 +1,7 @@
 
 .vscode
 saved_weights/*
+saved_weights
 logs/*
 !**/logs/README.md
 wandb/*
@@ -8,6 +9,7 @@ results/*
 log*.txt
 result_tabels/*
 Note.md
+data/du/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

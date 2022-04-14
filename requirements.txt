@@ -1,6 +1,7 @@
 tqdm
 numpy
 torch
+datasets
 transformers==4.8.1
 adapter-transformers
 accelerate

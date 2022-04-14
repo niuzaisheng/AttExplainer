@@ -185,6 +185,7 @@ class DQN(object):
         self.epsilon = config.epsilon
         self.gamma = config.gamma
         self.use_categorical_policy = config.use_categorical_policy
+        self.no_reselection_allowed = config.no_reselection_allowed
         self.memory = Memory(self.max_memory_capacity)
         self.loss_func = nn.MSELoss(reduce=False)
 
@@ -211,10 +212,13 @@ class DQN(object):
 
         next_game_status = game_status.clone()
         for i, position in enumerate(select_action):
-            if game_status[i, position] == 0:
-                next_game_status[i, position] = 1
-            else:
+            if self.no_reselection_allowed:
                 next_game_status[i, position] = 0
+            else:
+                if game_status[i, position] == 0:
+                    next_game_status[i, position] = 1
+                else:
+                    next_game_status[i, position] = 0
 
         mask_map = next_game_status == 1
 

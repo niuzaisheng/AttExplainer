@@ -42,6 +42,7 @@ def parse_args():
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--use_random_matrix", action="store_true", default=False)
+    parser.add_argument("--no_reselection_allowed", action="store_true", default=False)
 
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
@@ -129,7 +130,8 @@ def get_rewards(seq_length, original_loss, original_prob, post_acc, post_loss, p
     musked_token_rate = 1 - unmusked_token_rate
 
     ifdone = torch.logical_not(post_acc.bool()).float()
-    post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
+    # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
+    post_rewards = 10 * ifdone
 
     return post_rewards, ifdone, musked_token_rate, unmusked_token_rate
     
