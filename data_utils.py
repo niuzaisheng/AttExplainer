@@ -53,7 +53,11 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     token_word_position_map = get_token_word_position_map(batch, tokenizer)
 
     if problem_type == "single_label_classification":
+        # if first.get("label", None):
         batch["labels"] = torch.tensor([f["label"] for f in features], dtype=torch.long).unsqueeze(-1)
+        # else:
+        #     batch["labels"] = [0 for _ in features]
+
     elif problem_type == "multi_label_classification":
         labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
         batch["labels"] = F.one_hot(labels, num_classes=num_labels).float()
@@ -70,7 +74,9 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     batch["seq_length"] = torch.sum(batch["attention_mask"], dim=1).tolist()
     batch["token_word_position_map"] = token_word_position_map
     batch["special_tokens_mask"] = batch["special_tokens_mask"].bool()
-    # batch["sample_index"] = [0 for item in features]
+    if "id" in first.keys():
+        batch["id"] = torch.tensor([item["id"] for item in features]) 
+
     return batch
 
 
@@ -139,12 +145,20 @@ def get_dataset_config(config):
         text_col_name = "sentence"
         token_quantity_correction = 2
 
-    elif config.data_set_name == "du" or config.data_set_name == "ChnSentiCorp":
+    elif config.data_set_name == "ChnSentiCorp":
         model_name_or_path = "uer/roberta-base-finetuned-dianping-chinese"
         label_names = ["negative", "positive"]
         problem_type = "single_label_classification"
         text_col_num = 1
         text_col_name = "text_a"
+        token_quantity_correction = 2
+
+    elif config.data_set_name == "du" :
+        model_name_or_path = "uer/roberta-base-finetuned-dianping-chinese"
+        label_names = ["negative", "positive"]
+        problem_type = "single_label_classification"
+        text_col_num = 1
+        text_col_name = "context"
         token_quantity_correction = 2
 
     else:
@@ -251,13 +265,13 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         teacher_model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
 
     elif config.data_set_name in ["du"]:
-        dataset = load_dataset("json", data_files={"test":"data/du/data-part-1/senti_ch_part1.txt"})
+        dataset = load_dataset("json", data_files={"test":"data/du/data-part-1/senti_ch_part1_pred.txt"})
         train_dataset = None
         eval_dataset = dataset["test"]
 
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
+        # if return_simulate_dataloader:
+        #     simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
         eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         from transformers import AutoModelForSequenceClassification
