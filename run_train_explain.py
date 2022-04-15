@@ -5,6 +5,7 @@ import logging
 import argparse
 import numpy as np
 import torch
+import datetime
 
 from tqdm.auto import tqdm
 from accelerate.utils import send_to_device
@@ -28,18 +29,18 @@ def parse_args():
 
     # Dqn Settings
     parser.add_argument("--bins_num", type=int, default=32)
-    parser.add_argument("--max_memory_capacity", type=int, default=100000)
+    parser.add_argument("--max_memory_capacity", type=int, default=10000)
     parser.add_argument("--dqn_rl", type=float, default=0.0001)
     parser.add_argument("--target_replace_iter", type=int, default=100)
     parser.add_argument("--dqn_batch_size", type=int, default=256)
     parser.add_argument("--epsilon", type=float, default=0.7)
     parser.add_argument("--gamma", type=float, default=0.9)
-    parser.add_argument("--use_categorical_policy", type=bool, default=False)
+    parser.add_argument("--use_categorical_policy", action="store_true", default=False)
 
     # Game Settings
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
-    parser.add_argument("--use_random_matrix", type=bool, default=False)
+    parser.add_argument("--use_random_matrix", action="store_true", default=False)
     parser.add_argument("--done_threshold", type=float, default=0.8)
 
     # Train settings
@@ -48,9 +49,9 @@ def parse_args():
     parser.add_argument("--save_step_iter", type=int, default=10000)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
-    parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
-    parser.add_argument("--disable_tqdm", type=bool, default=False)
+    parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--discribe", type=str, default="Model interpretability training process")
 
     args = parser.parse_args()
@@ -67,7 +68,8 @@ logging.basicConfig(
 logger.info(f"Eval config: {config}")
 
 dt = datetime.datetime.now().strftime("%Y-%m-%d-%I-%M-%S")
-save_file_dir = f"saved_weights/{config.data_set_name}_{dt}"
+exp_name = f"{config.data_set_name}_{dt}"
+save_file_dir = f"saved_weights/{exp_name}"
 
 dataset_config = get_dataset_config(config)
 problem_type = dataset_config["problem_type"]
@@ -81,21 +83,20 @@ else:
 
 if config.use_wandb:
     import wandb
-    wandb.init(project=config.wandb_project_name, config=config)
-    wandb_config = wandb.config
+    wandb.init(name=exp_name, project=config.wandb_project_name, config=config)
     table_columns = ["completed_steps", "golden_label", "original_pred_label", "post_pred_label", "delta_p", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 
 tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
 MASK_TOKEN_ID = tokenizer.mask_token_id
 
-print("Start loading!")
+logger.info("Start loading!")
 transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_model(config, dataset_config, tokenizer)
-print("Finish loading!")
+logger.info("Finish loading!")
 
-print("one example:")
+logger.info("one example:")
 for _, batch in enumerate(simulate_dataloader):
-    print(batch)
+    logger.info(batch)
     break
 
 status_dict = {}
@@ -178,7 +179,7 @@ for epoch in range(config.max_train_epoch):
         simulate_batch = send_to_device(simulate_batch, lm_device)
 
         with torch.no_grad():
-            original_outputs = transformer_model(**simulate_batch)
+            original_outputs = transformer_model(**simulate_batch, output_attentions=True)
 
         original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
@@ -277,7 +278,7 @@ for epoch in range(config.max_train_epoch):
                 file_name = f"{save_file_dir}/dqn-{completed_steps}.bin"
                 with open(file_name, "wb") as f:
                     torch.save(dqn.eval_net.state_dict(), f)
-                    print(f"checkpoint saved in {file_name}")
+                    logger.info(f"checkpoint saved in {file_name}")
 
                 if config.use_wandb:
                     wandb.log({"input_ids": wandb_result_table})
@@ -291,7 +292,7 @@ for epoch in range(config.max_train_epoch):
         update_dict(exp_name, progress_bar, {"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
 
 
-print("Finish training!")
+logger.info("Finish training!")
 if config.use_wandb:
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()

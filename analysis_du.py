@@ -33,11 +33,13 @@ def parse_args():
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
-    parser.add_argument("--eval_test_batch_size", type=int, default=32)
+    parser.add_argument("--eval_test_batch_size", type=int, default=128)
     parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
     parser.add_argument("--disable_tqdm", type=bool, default=False)
-    parser.add_argument("--discribe", type=str, default="Model attack evaluation process")
+    parser.add_argument("--discribe", type=str, default="Du data")
+    parser.add_argument("--done_threshold", type=float, default=0.8)
+
 
     args = parser.parse_args()
     return args
@@ -69,7 +71,7 @@ if config.use_wandb:
     import wandb
     wandb.init(project=config.wandb_project_name, config=config)
     wandb_config = wandb.config
-    table_columns = ["completed_steps", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
+    table_columns = ["id", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 
 tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
@@ -81,7 +83,7 @@ transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_mod
 print("Finish loading!")
 
 
-def save_result(save_batch_size, completed_steps, original_input_ids, post_input_ids, gold_label, original_pred_labels, post_pred_labels, tokenizer, wandb_result_table):
+def save_result(save_batch_size, ids, original_input_ids, post_input_ids, gold_label, original_pred_labels, post_pred_labels, tokenizer, wandb_result_table):
     for i in range(save_batch_size):
         sample_label = gold_label[i].item()
         sample_label = label_names[sample_label]
@@ -91,7 +93,7 @@ def save_result(save_batch_size, completed_steps, original_input_ids, post_input
         post_pred_label = label_names[post_pred_label]
         train_batch_input_ids_example = display_ids(original_input_ids[i], tokenizer, name="train_batch_input_ids")
         post_batch_input_ids_example = display_ids(post_input_ids[i], tokenizer, name="post_batch_input_ids")
-        wandb_result_table.add_data(completed_steps, sample_label, original_pred_label, post_pred_label, train_batch_input_ids_example, post_batch_input_ids_example)
+        wandb_result_table.add_data(ids[i], sample_label, original_pred_label, post_pred_label, train_batch_input_ids_example, post_batch_input_ids_example)
 
 
 def get_rewards(seq_length, original_acc, original_loss, original_prob, post_acc, post_loss, post_prob, game_status, game_step):
@@ -102,7 +104,10 @@ def get_rewards(seq_length, original_acc, original_loss, original_prob, post_acc
     musked_token_num = seq_length - unmusk_token_num
     musked_token_rate = 1 - unmusk_token_rate
 
-    ifdone = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
+    delta_p = (original_prob - post_prob)
+    # ifdone = (delta_p >= config.done_threshold).float() # explainer
+    ifdone = (delta_p >= 0.4).float() # explainer
+    # ifdone = torch.logical_xor(original_acc.bool(), post_acc.bool()).float() # attacker
     post_rewards = (original_prob - post_prob) * unmusk_token_rate + 10 * ifdone * unmusk_token_rate - game_step / config.max_game_steps
 
     return post_rewards, ifdone, musked_token_rate, unmusk_token_rate, musked_token_num, unmusk_token_num
@@ -158,8 +163,7 @@ game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps, disable=
 
 for simulate_step, simulate_batch in enumerate(eval_dataloader):
     seq_length = simulate_batch.pop("seq_length")
-    if simulate_batch.get("id") is not None:
-        ids = simulate_batch.pop("id")
+    ids = simulate_batch.pop("id")
     batch_max_seq_length = max(seq_length)
     golden_labels = simulate_batch.pop("labels")
     special_tokens_mask = simulate_batch.pop("special_tokens_mask")
@@ -246,7 +250,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
             all_delta_prob.extend((original_prob[removed_index] - post_prob[removed_index]).tolist())
 
             if config.use_wandb:
-                save_result(removed_num, completed_steps, simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                save_result(removed_num, ids[removed_index].tolist(), simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                             golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                             tokenizer, wandb_result_table)
 
