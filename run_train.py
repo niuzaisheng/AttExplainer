@@ -21,11 +21,15 @@ set_seed(43)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run model interpretability training process")
+    parser = argparse.ArgumentParser(description="Run DQN training process")
 
     parser.add_argument(
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
     )
+
+    parser.add_argument("--task_type", type=str, default="attack",
+                        choices=["attack", "explain"],
+                        help="The type of the task. On of attack or explain.")
 
     # Dqn Settings
     parser.add_argument("--bins_num", type=int, default=32)
@@ -42,6 +46,7 @@ def parse_args():
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--use_random_matrix", action="store_true", default=False)
     parser.add_argument("--done_threshold", type=float, default=0.8)
+    parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
 
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
@@ -52,7 +57,7 @@ def parse_args():
     parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
     parser.add_argument("--disable_tqdm", action="store_true", default=False)
-    parser.add_argument("--discribe", type=str, default="Model interpretability training process")
+    parser.add_argument("--discribe", type=str, default="DQN model training process")
 
     args = parser.parse_args()
     return args
@@ -132,10 +137,17 @@ def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, gam
     unmusked_token_rate = unmusk_token_num / seq_length
     musked_token_num = seq_length - unmusk_token_num
     musked_token_rate = 1 - unmusked_token_rate
-
     delta_p = (original_prob - post_prob)
-    ifdone = (delta_p >= config.done_threshold).float()
-    post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
+
+    if config.task_type == "attack":
+        ifdone = torch.logical_not(post_acc.bool()).float()
+        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
+        post_rewards = 10 * ifdone
+
+    elif config.task_type == "explain":
+        ifdone = (delta_p >= config.done_threshold).float()
+        # post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
+        post_rewards = 10 * delta_p
 
     return delta_p, post_rewards, ifdone, musked_token_rate, unmusked_token_rate
 
@@ -151,13 +163,15 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
             post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
 
+        post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
+
     all_attentions = post_attention.unsqueeze(1)
 
-    return all_attentions, post_acc, post_prob, post_pred_labels
+    return all_attentions, post_acc, post_loss, post_prob, post_pred_labels
 
 
 dqn = DQN(config, mask_token_id=MASK_TOKEN_ID)
-progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader) * config.max_game_steps, disable=config.disable_tqdm)
+progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader), disable=config.disable_tqdm)
 exp_name = "simulate"
 
 lm_device = torch.device("cuda", config.gpu_index)
@@ -187,11 +201,20 @@ for epoch in range(config.max_train_epoch):
         update_dict(exp_name, progress_bar, {"original_prob": original_prob.mean().item()}, completed_steps)
 
         simulate_batch_size = len(seq_length)
+        if config.do_pre_deletion:
+            simulate_batch_size, seq_length, special_tokens_mask, simulate_batch, \
+                original_loss, original_acc, original_pred_labels, original_prob = \
+                gather_correct_examples(original_acc, simulate_batch_size, seq_length, special_tokens_mask, simulate_batch,
+                                        original_loss, original_pred_labels, original_prob)
+        if simulate_batch_size == 0:
+            continue
+
+        simulate_batch_size = len(seq_length)
         simulate_batch_size_at_start = len(seq_length)
 
         post_batch, actions, last_game_status = dqn.initial_action(simulate_batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
-        all_attentions, post_acc, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
-                                                                         lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+        all_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
+                                                                                    lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
 
         batch_done_step = []
         cumulative_rewards = None
@@ -199,8 +222,8 @@ for epoch in range(config.max_train_epoch):
         for game_step in range(config.max_game_steps):
 
             post_batch, actions, now_game_status = dqn.choose_action(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
-            next_attentions, post_acc, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
-                                                                              lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+            next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
+                                                                                         lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
             delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_prob, post_acc, post_prob, now_game_status, game_step)
             dqn.store_transition(simulate_batch_size, all_attentions, next_attentions, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
 
@@ -239,12 +262,14 @@ for epoch in range(config.max_train_epoch):
 
                 if completed_steps % 10 == 0:
                     if config.use_wandb:
-                        save_result(len(removed_index), completed_steps, simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                        save_result(len(removed_index), completed_steps,
+                                    simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                                     golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                                     delta_p[removed_index], tokenizer, wandb_result_table)
 
             if completed_steps % 10 == 0:
                 update_dict(exp_name, progress_bar, {
+                    "post_loss": post_loss.mean().item(),
                     "post_acc": post_acc.mean().item(),
                     "rewards": rewards.mean().item(),
                     "unmusked_token_rate": unmusked_token_rate.mean().item(),
@@ -288,8 +313,16 @@ for epoch in range(config.max_train_epoch):
                 update_dict(exp_name, progress_bar, {"all_done_step": game_step}, step=completed_steps)
                 break
 
+        if simulate_batch_size != 0:  # Can't reach finish status examples.
+            if config.use_wandb:
+                save_result(simulate_batch_size, completed_steps,
+                            simulate_batch["input_ids"], post_batch["input_ids"],
+                            golden_labels, original_pred_labels, post_pred_labels,
+                            delta_p, tokenizer, wandb_result_table)
+
         done_rate = 1 - simulate_batch_size / simulate_batch_size_at_start
         update_dict(exp_name, progress_bar, {"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
+        progress_bar.update(1)
 
 
 logger.info("Finish training!")
@@ -299,4 +332,4 @@ if config.use_wandb:
 
 with open(f"{save_file_dir}/dqn-final.bin", "wb") as f:
     torch.save(dqn.eval_net.state_dict(), f)
-print(f"Finish saving in {save_file_dir}")
+logger.info(f"Finish saving in {save_file_dir}")

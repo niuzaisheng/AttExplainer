@@ -9,6 +9,9 @@ from torch import Tensor
 
 
 def get_attention(model_outputs, layer_sets=None):
+    """
+        Get attention metrix from the model. Output size is [Batch, 1, seq_len, seq_len]
+    """
     batch_attentions = model_outputs.attentions
     if layer_sets == 1:
         batch_attentions = batch_attentions[0:5]
