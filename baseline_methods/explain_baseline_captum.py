@@ -33,7 +33,8 @@ def parse_args():
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=8)
-    parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--use_wandb", action="store_true", default=False)
+    parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
     parser.add_argument("--discribe", type=str, default="Captum")
 
@@ -58,7 +59,7 @@ token_quantity_correction = dataset_config["token_quantity_correction"]
 
 if config.use_wandb:
     import wandb
-    wandb.init(project=config.wandb_project_name, config=config)
+    wandb.init(name=f"Expaliner_{config.explain_method}_{config.max_sample_num}", project=config.wandb_project_name, config=config)
     table_columns = ["completed_steps", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 
@@ -114,7 +115,7 @@ elif config.explain_method == "KernelShap":
 elif config.explain_method == "ShapleyValueSampling":
     lig = ShapleyValueSampling(predict)
 
-for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
+for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=config.disable_tqdm):
 
     all_eval_example_num += 1
     if isinstance(text_col_name, str):
@@ -143,7 +144,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
     original_pred_prob = torch.softmax(predict_loogits, 0)[original_pred_label].item()
 
 
-    if config.explain_method == "FeaturePermutation":
+    if config.explain_method == "FeatureAblation":
         summarize_res = lig.attribute(inputs=input_ids,
                                         target=original_pred_label,
                                         additional_forward_args=(token_type_ids, attention_mask, 0))
@@ -188,7 +189,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
         all_done_step_musk_token_num[game_step].append(musk_token_num)
         all_done_step_unmusk_token_num[game_step].append(unmusk_token_num)
         all_fidelity.append(True)
-        for i in range(100):
+        for i in range(config.max_sample_num):
             if i < game_step:
                 all_game_step_done_num[i].append(False)
             else:
@@ -200,7 +201,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
         wandb_result_table.add_data(index, golden_label_name, original_pred_label_name, post_pred_label_name, train_batch_input_ids_example, attack_text)
     else:
         all_fidelity.append(False)
-        for i in range(100):
+        for i in range(config.max_sample_num):
             all_game_step_done_num[i].append(False)
 
     # delta prob
