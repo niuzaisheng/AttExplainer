@@ -28,3 +28,5 @@ df.describe()
 
 profile = ProfileReport(df, title="Pandas Profiling Report")
 profile.to_file(f"Report_for_baseline_{explain_method}_by_{explain_method}.html")
+
+# %%

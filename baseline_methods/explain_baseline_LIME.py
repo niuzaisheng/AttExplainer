@@ -20,6 +20,8 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 logger = logging.getLogger(__name__)
 
+import warnings
+warnings.filterwarnings("ignore")
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run Explainable baseline method Anchor")
@@ -30,8 +32,9 @@ def parse_args():
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=8)
-    parser.add_argument("--lime_max_sampling_num", type=int, default=100)
-    parser.add_argument("--use_wandb", type=bool, default=True)
+    parser.add_argument("--max_sample_num", type=int, default=100)
+    parser.add_argument("--use_wandb", action="store_true", default=False)
+    parser.add_argument("--disable_tqdm", action="store_true", default=False)    
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
     parser.add_argument("--discribe", type=str, default="LIME")
 
@@ -56,7 +59,7 @@ text_col_num = dataset_config["text_col_num"]
 
 if config.use_wandb:
     import wandb
-    wandb.init(project=config.wandb_project_name, config=config)
+    wandb.init(name=f"Expaliner_LIME_{config.max_sample_num}", project=config.wandb_project_name, config=config)
     wandb_config = wandb.config
     table_columns = ["completed_steps", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
@@ -149,7 +152,7 @@ def check_result(input_ids):
 
 explainer = LimeTextExplainer(class_names=label_names, bow=False, mask_string=str(tokenizer.mask_token_id))
 
-for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
+for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=config.disable_tqdm):
 
     all_eval_example_num += 1
     if isinstance(text_col_name, str):
@@ -182,7 +185,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset)):
 
     valid_input_ids = " ".join([str(i) for i in valid_input_ids])
     exp = explainer.explain_instance(valid_input_ids, batch_eval, labels=(original_pred_label,), 
-                                     num_features=valid_token_num, num_samples=config.lime_max_sampling_num)
+                                     num_features=valid_token_num, num_samples=config.max_sample_num)
 
     exp_dict = exp.as_map()[original_pred_label]
     exp_dict = {i: value for i, value in exp_dict}
