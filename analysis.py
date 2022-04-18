@@ -82,7 +82,6 @@ transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_mod
 logger.info("Finish loading!")
 
 
-
 def get_rewards(seq_length, original_acc, original_prob, original_loss, post_acc, post_prob, post_loss, game_status, game_step):
 
     seq_length = torch.FloatTensor(seq_length) - token_quantity_correction
@@ -213,13 +212,12 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
             next_token_word_position_map, next_cumulative_rewards, \
             next_original_acc, next_original_loss, next_original_prob, \
             left_delta_p, left_musked_token_rate, left_unmusked_token_rate, \
-            removed_index = \
-            gather_unfinished_examples(ifdone, simulate_batch_size, seq_length, golden_labels, special_tokens_mask,
-                                       next_attentions, now_game_status,
-                                       simulate_batch, original_pred_labels,
-                                       token_word_position_map, cumulative_rewards,
-                                       original_acc, original_loss, original_prob,
-                                       delta_p, musked_token_rate, unmusked_token_rate)
+            removed_index = gather_unfinished_examples(ifdone, simulate_batch_size, seq_length, golden_labels, special_tokens_mask,
+                                                       next_attentions, now_game_status,
+                                                       simulate_batch, original_pred_labels,
+                                                       token_word_position_map, cumulative_rewards,
+                                                       original_acc, original_loss, original_prob,
+                                                       delta_p, musked_token_rate, unmusked_token_rate)
 
         all_game_step_mask_rate[game_step + 1].extend(musked_token_rate.tolist())
         all_game_step_mask_token_num[game_step + 1].extend(musked_token_num.tolist())
@@ -296,11 +294,13 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
-assert attack_example_num == len(all_delta_prob) == len(all_fidelity) == \
-             len(all_musked_token_rate) == len(all_unmusked_token_rate) == len(all_musked_word_rate)
+try:
+    assert attack_example_num == len(all_delta_prob) == len(all_fidelity) == \
+        len(all_musked_token_rate) == len(all_unmusked_token_rate) == len(all_musked_word_rate)
+except:
+    print(f"""{attack_example_num} == {len(all_delta_prob)} == {len(all_fidelity)} ==
+          {len(all_musked_token_rate)} == {len(all_unmusked_token_rate)}""")
 
-# print(f"""{attack_example_num} == {len(all_delta_prob)} == {len(all_fidelity)} == 
-#           {len(all_musked_token_rate)} == {len(all_unmusked_token_rate)}""")
 
 logger.info("Finish eval!")
 

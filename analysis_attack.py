@@ -179,7 +179,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
     simulate_batch_size_at_start = len(seq_length)
     all_eval_token_length.extend(seq_length)
     all_eval_example_num += len(seq_length)
-    progress_bar.update(simulate_batch_size)
+    progress_bar.update(1)
     game_step_progress_bar.reset()
     attack_example_num += simulate_batch_size
     all_game_step_mask_rate[0].append(0)
@@ -281,6 +281,12 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
 print("Finish eval!")
+
+try:
+    assert attack_example_num == len(all_delta_prob) == len(all_musked_token_rate) == len(all_musked_word_rate)
+except:
+    print(f"""{attack_example_num} == {len(all_delta_prob)} == {len(all_musked_token_rate)}""")
+
 
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num
