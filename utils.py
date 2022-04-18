@@ -57,6 +57,20 @@ def display_ids(input_ids, tokenizer, name):
     return string
 
 
+def save_result(save_batch_size, completed_steps, original_input_ids, post_input_ids,
+                golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, label_names, wandb_result_table):
+    for i in range(save_batch_size):
+        golden_label = golden_labels[i].item()
+        golden_label = label_names[golden_label]
+        original_pred_label = original_pred_labels[i].item()
+        original_pred_label = label_names[original_pred_label]
+        post_pred_label = post_pred_labels[i].item()
+        post_pred_label = label_names[post_pred_label]
+        item_delta_p = delta_p[i].item()
+        train_batch_input_ids_example = display_ids(original_input_ids[i], tokenizer, name="train_batch_input_ids")
+        post_batch_input_ids_example = display_ids(post_input_ids[i], tokenizer, name="post_batch_input_ids")
+        wandb_result_table.add_data(completed_steps, golden_label, original_pred_label, post_pred_label, item_delta_p, train_batch_input_ids_example, post_batch_input_ids_example)
+
 def ids2list(input_ids, tokenizer):
     input_ids = input_ids.cpu()
     l = tokenizer.convert_ids_to_tokens(input_ids)
@@ -236,7 +250,10 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
                                cumulative_rewards: Tensor = None,
                                original_acc: Tensor = None,
                                original_loss: Tensor = None,
-                               original_prob: Tensor = None
+                               original_prob: Tensor = None,
+                               delta_p: Tensor = None,
+                               musked_token_rate: Tensor = None,
+                               unmusked_token_rate: Tensor = None,
                                ):
 
     left_index = [i for i in range(simulate_batch_size) if ifdone[i].item() == 0]
@@ -257,7 +274,20 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
     for key in simulate_batch.keys():
         next_simulate_batch[key] = simulate_batch[key][left_index]
 
-    return len(left_index), left_seq_length, left_golden_labels, left_special_tokens_mask, \
-        left_next_attentions, left_next_game_status, next_simulate_batch, \
-        left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
-        left_original_acc, left_original_loss, left_original_prob, removed_index
+    if delta_p is not None:
+        left_delta_p = delta_p[left_index]
+        left_musked_token_rate = musked_token_rate[left_index]
+        left_unmusked_token_rate = unmusked_token_rate[left_index]
+
+        return len(left_index), left_seq_length, left_golden_labels, left_special_tokens_mask, \
+            left_next_attentions, left_next_game_status, next_simulate_batch, \
+            left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
+            left_original_acc, left_original_loss, left_original_prob, \
+            left_delta_p, left_musked_token_rate, left_unmusked_token_rate, \
+            removed_index
+    else:
+        return len(left_index), left_seq_length, left_golden_labels, left_special_tokens_mask, \
+            left_next_attentions, left_next_game_status, next_simulate_batch, \
+            left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
+            left_original_acc, left_original_loss, left_original_prob, \
+            removed_index

@@ -176,7 +176,6 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
     original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
     simulate_batch_size = len(seq_length)
-
     simulate_batch_size_at_start = len(seq_length)
     all_eval_token_length.extend(seq_length)
     all_eval_example_num += len(seq_length)
@@ -225,7 +224,6 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
         removed_num = len(removed_index)
         if removed_num != 0:
-            rewards_list = rewards[removed_index]
 
             all_musked_token_rate.extend(musked_token_rate[removed_index].tolist())
             all_unmusk_token_rate.extend(unmusk_token_rate[removed_index].tolist())

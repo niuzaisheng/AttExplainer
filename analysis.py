@@ -82,20 +82,6 @@ transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_mod
 logger.info("Finish loading!")
 
 
-def save_result(save_batch_size, completed_steps, original_input_ids, post_input_ids,
-                golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, wandb_result_table):
-    for i in range(save_batch_size):
-        golden_label = golden_labels[i].item()
-        golden_label = label_names[golden_label]
-        original_pred_label = original_pred_labels[i].item()
-        original_pred_label = label_names[original_pred_label]
-        post_pred_label = post_pred_labels[i].item()
-        post_pred_label = label_names[post_pred_label]
-        item_delta_p = delta_p[i].item()
-        train_batch_input_ids_example = display_ids(original_input_ids[i], tokenizer, name="train_batch_input_ids")
-        post_batch_input_ids_example = display_ids(post_input_ids[i], tokenizer, name="post_batch_input_ids")
-        wandb_result_table.add_data(completed_steps, golden_label, original_pred_label, post_pred_label, item_delta_p, train_batch_input_ids_example, post_batch_input_ids_example)
-
 
 def get_rewards(seq_length, original_acc, original_prob, original_loss, post_acc, post_prob, post_loss, game_status, game_step):
 
@@ -170,6 +156,7 @@ progress_bar = tqdm(desc="example", total=len(eval_dataloader), disable=config.d
 game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps, disable=config.disable_tqdm)
 
 for simulate_step, simulate_batch in enumerate(eval_dataloader):
+
     seq_length = simulate_batch.pop("seq_length")
     if simulate_batch.get("id") is not None:
         ids = simulate_batch.pop("id")
@@ -211,7 +198,6 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         post_batch, actions, now_game_status, action_value = dqn.choose_action_for_eval(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
         next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                      lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
-
         rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, \
             musked_token_num, unmusk_token_num = get_rewards(seq_length, original_acc, original_prob, original_loss,
                                                              post_acc, post_prob, post_loss, now_game_status, game_step)
@@ -225,12 +211,15 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_attentions, \
             next_game_status, next_simulate_batch, next_original_pred_labels, \
             next_token_word_position_map, next_cumulative_rewards, \
-            next_original_acc, next_original_loss, next_original_prob, removed_index = \
+            next_original_acc, next_original_loss, next_original_prob, \
+            left_delta_p, left_musked_token_rate, left_unmusked_token_rate, \
+            removed_index = \
             gather_unfinished_examples(ifdone, simulate_batch_size, seq_length, golden_labels, special_tokens_mask,
                                        next_attentions, now_game_status,
                                        simulate_batch, original_pred_labels,
                                        token_word_position_map, cumulative_rewards,
-                                       original_acc, original_loss, original_prob)
+                                       original_acc, original_loss, original_prob,
+                                       delta_p, musked_token_rate, unmusked_token_rate)
 
         all_game_step_mask_rate[game_step + 1].extend(musked_token_rate.tolist())
         all_game_step_mask_token_num[game_step + 1].extend(musked_token_num.tolist())
@@ -264,7 +253,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
             if config.use_wandb:
                 save_result(removed_num, completed_steps, simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                             golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
-                            delta_p[removed_index], tokenizer, wandb_result_table)
+                            delta_p[removed_index], tokenizer, label_names, wandb_result_table)
 
         # Start the next game step
         simulate_batch_size = next_simulate_batch_size
@@ -290,9 +279,10 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         # Not successful samples
         unfinished_index = [i for i in range(simulate_batch_size)]
 
-        all_delta_prob.extend(delta_p.tolist())
-        all_musked_token_rate.extend(musked_token_rate.tolist())
-        all_unmusked_token_rate.extend(unmusked_token_rate.tolist())
+        all_delta_prob.extend(left_delta_p.tolist())
+        all_musked_token_rate.extend(left_musked_token_rate.tolist())
+        all_unmusked_token_rate.extend(left_unmusked_token_rate.tolist())
+
         word_masked_rate = get_word_masked_rate(next_game_status, seq_length, token_word_position_map)
         all_musked_word_rate.extend(word_masked_rate)
 
@@ -302,13 +292,15 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
         if config.use_wandb:
             save_result(removed_num, completed_steps, simulate_batch["input_ids"], post_batch["input_ids"],
-                        golden_labels, original_pred_labels, post_pred_labels,
-                        delta_p, tokenizer, wandb_result_table)
+                        golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, label_names, wandb_result_table)
 
     all_game_step_done_num[game_step + 1].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
 assert attack_example_num == len(all_delta_prob) == len(all_fidelity) == \
              len(all_musked_token_rate) == len(all_unmusked_token_rate) == len(all_musked_word_rate)
+
+# print(f"""{attack_example_num} == {len(all_delta_prob)} == {len(all_fidelity)} == 
+#           {len(all_musked_token_rate)} == {len(all_unmusked_token_rate)}""")
 
 logger.info("Finish eval!")
 
