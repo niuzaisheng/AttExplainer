@@ -237,7 +237,7 @@ reslut["Eval Example Number"] = all_eval_example_num
 reslut["Attack Success Rate"] = attack_successful_num / all_eval_example_num
 reslut["Token Modification Rate"] = np.mean(all_musked_token_rate) # Token Level
 reslut["Token Left Rate"] = np.mean(all_unmusked_token_rate) # Token Level
-reslut["Fidelity+"] = np.mean(fidelity_add)
+reslut["Fidelity"] = np.mean(fidelity_add)
 reslut["delta_prob"] = np.mean(all_delta_prob)
 
 logger.info(f"Result")
