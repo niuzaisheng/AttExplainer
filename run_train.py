@@ -141,8 +141,9 @@ def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, gam
 
     if config.task_type == "attack":
         ifdone = torch.logical_not(post_acc.bool()).float()
+        post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
         # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
-        post_rewards = 10 * ifdone
+        # post_rewards = 10 * ifdone
 
     elif config.task_type == "explain":
         ifdone = (delta_p >= config.done_threshold).float()
@@ -225,7 +226,7 @@ for epoch in range(config.max_train_epoch):
             next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                          lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
             delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_prob, post_acc, post_prob, now_game_status, game_step)
-            dqn.store_transition(simulate_batch_size, all_attentions, next_attentions, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
+            dqn.store_transition(simulate_batch_size, all_attentions, next_attentions, last_game_status, now_game_status, actions, seq_length, rewards, ifdone, special_tokens_mask)
 
             if cumulative_rewards is None:
                 cumulative_rewards = rewards

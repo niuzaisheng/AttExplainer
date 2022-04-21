@@ -1,3 +1,4 @@
+from re import T
 from typing import List
 import numpy as np
 import random
@@ -67,7 +68,7 @@ def gather2D(tensors: List[Tensor]):
     return out_dict
 
 
-BufferItem = namedtuple("BufferItem", ("all_attentions", "next_attentions", "actions", "game_status", "next_game_status",  "seq_length", "rewards", "ifdone"))
+BufferItem = namedtuple("BufferItem", ("all_attentions", "next_attentions", "actions", "game_status", "next_game_status",  "seq_length", "rewards", "ifdone", "special_tokens_mask"))
 
 
 class DQN(object):
@@ -149,10 +150,10 @@ class DQN(object):
             game_status[i, index:] = 0
         return batch, actions.to(device), game_status.to(device)
 
-    def store_transition(self, batch_size, all_attentions, next_attentions, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
+    def store_transition(self, batch_size, all_attentions, next_attentions, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone, special_tokens_mask):
         self.eval_net.eval()
         with torch.no_grad():
-            q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone).detach()
+            q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone, special_tokens_mask).detach()
 
         all_attentions = send_to_device(all_attentions, "cpu")
         next_attentions = send_to_device(next_attentions, "cpu")
@@ -161,6 +162,7 @@ class DQN(object):
         actions = send_to_device(actions, "cpu")
         rewards = send_to_device(rewards, "cpu")
         ifdone = send_to_device(ifdone, "cpu")
+        special_tokens_mask = send_to_device(special_tokens_mask, "cpu")
         q_loss = send_to_device(q_loss, "cpu").numpy()
 
         temp_list = []
@@ -173,21 +175,26 @@ class DQN(object):
                                   seq_length=batch_seq_length[i],
                                   rewards=rewards[i],
                                   ifdone=ifdone[i],
+                                  special_tokens_mask=special_tokens_mask[i]
                                   )
             temp_list.append(new_item)
             self.memory.add(q_loss[i], temp_list[i])
 
-    def get_td_loss(self, batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone):
+    def get_td_loss(self, batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone, special_tokens_mask):
         ifdone = ifdone.float()
         q_eval = self.eval_net(all_attentions, game_status, batch_seq_length)
         max_seq_len = q_eval.size(1)
         actions = F.one_hot(actions, num_classes=max_seq_len).bool()
-
         q_eval = q_eval.masked_select(actions)  # [B, seq, 1]  -> [B, 1]
 
         with torch.no_grad():
             q_target = self.target_net(next_attentions, next_game_status, batch_seq_length)
-        q_target = q_target.masked_select(actions)
+
+        q_target = q_target.masked_fill(special_tokens_mask, -np.inf)
+        q_target = q_target.max(1)[0]
+        # target_actions = torch.argmax(q_target, dim=1)
+        # target_actions = F.one_hot(target_actions, num_classes=max_seq_len).bool()
+        # q_target = q_target.masked_select(target_actions)  # [B, seq, 1]  -> [B, 1]
 
         q_target = rewards + self.gamma * (1 - ifdone) * q_target.detach()
 
@@ -214,9 +221,10 @@ class DQN(object):
         actions = samples["actions"]
         rewards = samples["rewards"]
         ifdone = samples["ifdone"]
+        special_tokens_mask = samples["special_tokens_mask"]
 
         self.eval_net.train()
-        q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone)
+        q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone, special_tokens_mask)
 
         q_loss_detached = q_loss.detach()
         for i in range(self.dqn_batch_size):
