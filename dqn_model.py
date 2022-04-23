@@ -244,7 +244,7 @@ class DQN_eval(object):
         self.eval_net = DQNNet(config)
         self.mask_token_id = mask_token_id
         with open(config.dqn_weights_path, "rb") as f:
-            self.eval_net.load_state_dict(torch.load(f))
+            self.eval_net.load_state_dict(torch.load(f, map_location=self.device))
 
     def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, all_attentions, game_status):
         target_device = batch["input_ids"].device

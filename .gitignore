@@ -4,7 +4,7 @@ saved_weights/*
 saved_weights
 logs/*
 !**/logs/README.md
-wandb/*
+wandb
 results/*
 log*.txt
 result_tabels/*
@@ -140,3 +140,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+run_baseline_grad.sh
