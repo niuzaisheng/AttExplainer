@@ -6,8 +6,8 @@ from pandas_profiling import ProfileReport
 api = wandb.Api()
 
 # %%
-explain_method = "KernelShap"  # "ShapleyValueSampling" , "KernelShap" or "LIME"
-data_set_name = "sst2"  # "emotion", "sst2" or "snli"
+explain_method = "LIME"  # "ShapleyValueSampling" , "KernelShap" or "LIME"
+data_set_name = "snli"  # "emotion", "sst2" or "snli"
 
 runs = api.runs("attexplaner", filters={
     # "config.explain_method": explain_method,
@@ -32,6 +32,6 @@ df = pd.DataFrame(summary_list)
 df.describe()
 
 profile = ProfileReport(df, title="Pandas Profiling Report")
-profile.to_file(f"Report_for_baseline_{data_set_name}_by_{explain_method}.html")
+profile.to_file(f"reports/Report_for_baseline_{data_set_name}_by_{explain_method}.html")
 
 # %%
