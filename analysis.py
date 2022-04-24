@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
     parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
-    parser.add_argument("--disable_tqdm", type=bool, default=False)
+    parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--discribe", type=str, default="Model evaluation process")
 
     args = parser.parse_args()

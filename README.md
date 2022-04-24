@@ -27,7 +27,7 @@ Next is how to replicat all experiments:
 If use default training config:
 
     mkdir saved_weights
-    python run_train_explain.py --data_set_name emotion
+    python run_train.py --data_set_name emotion --task_type explain --use_wandb
 
 Other settings can be found in `run_train_explain.py`
 
@@ -35,15 +35,15 @@ Other settings can be found in `run_train_explain.py`
 
 - emotion
 
-    python analysis_explain.py --data_set_name emotion --dqn_weights_path report_weights/emotion_explainer_1M.bin
+    python analysis.py --data_set_name emotion --task explain --use_wandb --dqn_weights_path report_weights/emotion_explainer_1M.bin
 
 - sst2
 
-    python analysis_explain.py --data_set_name sst2 --done_threshold 0.7 --dqn_weights_path report_weights/sst2_explainer_460000.bin
+    python analysis.py  --data_set_name sst2 --task explain --done_threshold 0.7 --use_wandb --dqn_weights_path report_weights/sst2_explainer_460000.bin
 
 - snli
 
-    python analysis_explain.py --data_set_name snli --dqn_weights_path report_weights/snli_explainer_300000.bin
+    python analysis.py  --data_set_name snli --task explain --use_wandb --dqn_weights_path report_weights/snli_explainer_300000.bin
     
 ## For Adversarial Attack
 ### Run RL training process
@@ -51,7 +51,7 @@ Other settings can be found in `run_train_explain.py`
 If use default training config:
 
     mkdir saved_weights
-    python run_train_attack.py --data_set_name emotion
+    nohup python run_train.py --data_set_name emotion --task_type attack --use_wandb
 
 Other settings can be found in `run_train_attack.py`
 
@@ -59,12 +59,12 @@ Other settings can be found in `run_train_attack.py`
 
 - emotion
 
-    python analysis_attack.py --data_set_name emotion --dqn_weights_path report_weights/emotion_attacker_1M.bin
+    python analysis.py --data_set_name emotion --task attack --use_wandb --dqn_weights_path report_weights/emotion_attacker_1M.bin
 
 - sst2
 
-    python analysis_attack.py --data_set_name sst2 --dqn_weights_path report_weights/sst2_attacker_460000.bin
+    python analysis.py --data_set_name sst2 --task attack --use_wandb --dqn_weights_path report_weights/sst2_attacker_460000.bin
 
 - snli
 
-    python analysis_attack.py --data_set_name snli --dqn_weights_path report_weights/snli_attacker_300000.bin
+    python analysis.py --data_set_name snli --task attack --use_wandb --dqn_weights_path report_weights/snli_attacker_300000.bin

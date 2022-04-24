@@ -206,7 +206,6 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
 
 def compute_fidelity(original_model, finished_index, simulate_batch, special_tokens_mask,
                      game_status, original_pred_labels, lm_device, mask_token_id=103):
-    # Compute fidelity
 
     fidelity_plus_batch = {}
     fidelity_minus_batch = {}

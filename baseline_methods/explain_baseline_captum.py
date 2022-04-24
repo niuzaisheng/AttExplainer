@@ -103,7 +103,7 @@ def predict(inputs, token_type_ids=None, attention_mask=None, position=0, add_ga
     if add_game_step:
         game_step += 1
     with torch.no_grad():
-        output = transformer_model(inputs, token_type_ids=token_type_ids, attention_mask=attention_mask, )
+        output = transformer_model(inputs, token_type_ids=token_type_ids, attention_mask=attention_mask)
     return output.logits
 
 if config.explain_method == "FeatureAblation":
@@ -161,7 +161,7 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disabl
                                         baselines=ref_input_ids,
                                         target=original_pred_label,
                                         n_samples=config.max_sample_num,
-                                        perturbations_per_eval = 16,
+                                        perturbations_per_eval = 1,
                                         additional_forward_args=(token_type_ids, attention_mask, 0))
 
 
