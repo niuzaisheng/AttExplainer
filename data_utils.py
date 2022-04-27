@@ -1,7 +1,6 @@
-import json
+
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from datasets import load_dataset
 from torch.utils.data.dataloader import DataLoader
@@ -54,12 +53,11 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
 
     if problem_type == "single_label_classification":
         batch["labels"] = torch.tensor([f["label"] for f in features], dtype=torch.long).unsqueeze(-1)
+
     elif problem_type == "multi_label_classification":
         labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
         batch["labels"] = F.one_hot(labels, num_classes=num_labels).float()
 
-    # Handling of all other possible keys.
-    # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
         if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -70,7 +68,9 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     batch["seq_length"] = torch.sum(batch["attention_mask"], dim=1).tolist()
     batch["token_word_position_map"] = token_word_position_map
     batch["special_tokens_mask"] = batch["special_tokens_mask"].bool()
-    # batch["sample_index"] = [0 for item in features]
+    if "id" in first.keys():
+        batch["id"] = torch.tensor([item["id"] for item in features]) 
+
     return batch
 
 
@@ -90,8 +90,6 @@ def double_sentence_data_collator(features, tokenizer, num_labels, problem_type,
         labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
         batch["labels"] = F.one_hot(labels, num_classes=num_labels).float()
 
-    # Handling of all other possible keys.
-    # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
         if k not in ("label", "label_ids", "idx") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -210,15 +208,6 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         dataset = load_dataset("glue", config.data_set_name)
         dataset = dataset.remove_columns(["idx"])
         train_dataset = dataset["train"]
-
-        # print("## before filiter length", len(train_dataset))
-        # def length_filter(exmaple):
-        #     text = exmaple[text_col_name]
-        #     tokens = text.split(" ")
-        #     return len(tokens)>5
-        # train_dataset = train_dataset.filter(length_filter)
-        # print("## after filiter length", len(train_dataset))
-
         eval_dataset = dataset["validation"]
 
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
