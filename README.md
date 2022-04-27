@@ -1,11 +1,23 @@
-# AttExplainer
+
+<p align="center">
+<h1 align="center"> AttExplainer </h1>
+</p>
+
+<p align="center">
+  	<a href="https://github.com/niuzaisheng/AttExplainer/stargazers">
+        <img alt="stars" src="https://img.shields.io/github/stars/niuzaisheng/AttExplainer">
+    </a>
+   	<a href="https://github.com/niuzaisheng/AttExplainer/network/members">
+        <img alt="forks" src="https://img.shields.io/github/forks/niuzaisheng/AttExplainer">
+    </a>
+   	<a href="https://github.com/niuzaisheng/AttExplainer/issues">
+        <img alt="issues" src="https://img.shields.io/github/issues/niuzaisheng/AttExplainer">
+    </a>
+    <img alt="GitHub license badge" src="https://img.shields.io/github/license/niuzaisheng/AttExplainer">
+    <br />
+</p>
 
 Code for "AttExplainer: Explain Transformer via Attention by Reinforcement Learning". Published in IJCAI-ECAI 2022.
-
-<img alt="GitHub stars badge" src="https://img.shields.io/github/stars/niuzaisheng/AttExplainer">
-<img alt="GitHub forks badge" src="https://img.shields.io/github/forks/niuzaisheng/AttExplainer">
-<img alt="GitHub issues badge" src="https://img.shields.io/github/issues/niuzaisheng/AttExplainer">
-<img alt="GitHub license badge" src="https://img.shields.io/github/license/niuzaisheng/AttExplainer">
 
 ![Framework](images/Framework.jpg "The framework of AttExplainer")
 
