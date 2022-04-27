@@ -92,13 +92,10 @@ def get_rewards(seq_length, original_acc, original_prob, original_loss, post_acc
 
     if config.task_type == "attack":
         ifdone = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
-        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
-        # post_rewards = (original_prob - post_prob) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
         post_rewards = 10 * ifdone
 
     elif config.task_type == "explain":
         ifdone = (delta_p >= config.done_threshold).float()
-        # post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
         post_rewards = 10 * delta_p
 
     return post_rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num

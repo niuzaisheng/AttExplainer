@@ -313,7 +313,8 @@ for epoch in range(config.max_train_epoch):
                 update_dict(exp_name, progress_bar, {"all_done_step": game_step}, step=completed_steps)
                 break
 
-        if simulate_batch_size != 0:  # Can't reach finish status examples.
+        if simulate_batch_size != 0:  
+            # Can't reach finish status examples.
             if config.use_wandb:
                 save_result(simulate_batch_size, completed_steps,
                             simulate_batch["input_ids"], post_batch["input_ids"],
