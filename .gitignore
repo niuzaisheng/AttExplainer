@@ -10,6 +10,7 @@ log*.txt
 result_tabels/*
 Note.md
 data/du/*
+test.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

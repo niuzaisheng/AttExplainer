@@ -69,7 +69,6 @@ else:
 if config.use_wandb:
     import wandb
     wandb.init(project=config.wandb_project_name, config=config)
-    wandb_config = wandb.config
     table_columns = ["completed_steps", "golden_label", "original_pred_label", "post_pred_label", "delta_p", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 

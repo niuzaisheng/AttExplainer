@@ -63,7 +63,7 @@ Other settings can be found in `run_train_attack.py`
 
 - sst2
 
-    python analysis.py --data_set_name sst2 --task attack --use_wandb --dqn_weights_path report_weights/sst2_attacker_460000.bin
+    python analysis.py --data_set_name sst2 --task attack --use_wandb --dqn_weights_path report_weights/sst2_attacker_3M.bin
 
 - snli
 

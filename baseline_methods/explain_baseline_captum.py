@@ -101,7 +101,7 @@ all_done_step_unmusk_token_num = defaultdict(list) # unmask token num in each do
 def predict(inputs, token_type_ids=None, attention_mask=None, position=0, add_game_step=True):
     global game_step
     if add_game_step:
-        game_step += 1
+        game_step += inputs.size(0)
     with torch.no_grad():
         output = transformer_model(inputs, token_type_ids=token_type_ids, attention_mask=attention_mask)
     return output.logits
@@ -198,7 +198,8 @@ for index, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disabl
         golden_label_name = label_names[golden_label]
         original_pred_label_name = label_names[original_pred_label]
         post_pred_label_name = label_names[post_pred_label]
-        wandb_result_table.add_data(index, golden_label_name, original_pred_label_name, post_pred_label_name, train_batch_input_ids_example, attack_text)
+        if config.use_wandb:
+            wandb_result_table.add_data(index, golden_label_name, original_pred_label_name, post_pred_label_name, train_batch_input_ids_example, attack_text)
     else:
         all_fidelity.append(False)
         for i in range(config.max_sample_num):

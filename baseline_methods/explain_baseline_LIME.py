@@ -29,6 +29,7 @@ def parse_args():
     parser.add_argument(
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
     )
+    parser.add_argument("--explain_method", type=str, default="LIME")
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=8)
@@ -60,7 +61,6 @@ text_col_num = dataset_config["text_col_num"]
 if config.use_wandb:
     import wandb
     wandb.init(name=f"Expaliner_LIME_{config.max_sample_num}", project=config.wandb_project_name, config=config)
-    wandb_config = wandb.config
     table_columns = ["completed_steps", "sample_label", "original_pred_label", "post_pred_label", "original_input_ids", "post_batch_input_ids"]
     wandb_result_table = wandb.Table(columns=table_columns)
 
@@ -105,7 +105,8 @@ def batch_eval(eval_list):
     global game_step, input_special_token_ids, valid_ids_map
 
     eval_batch = len(eval_list) // config.eval_test_batch_size + 1
-
+    assert len(eval_list) == config.max_sample_num
+    
     all_result = None
     for i in range(eval_batch):
         if (i+1) * config.eval_test_batch_size > len(eval_list):
