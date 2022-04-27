@@ -2,6 +2,11 @@
 
 Code for "AttExplainer: Explain Transformer via Attention by Reinforcement Learning". Published in IJCAI-ECAI 2022.
 
+<img alt="GitHub stars badge" src="https://img.shields.io/github/stars/niuzaisheng/AttExplainer">
+<img alt="GitHub forks badge" src="https://img.shields.io/github/forks/niuzaisheng/AttExplainer">
+<img alt="GitHub issues badge" src="https://img.shields.io/github/issues/niuzaisheng/AttExplainer">
+<img alt="GitHub license badge" src="https://img.shields.io/github/license/niuzaisheng/AttExplainer">
+
 ![Framework](images/Framework.jpg "The framework of AttExplainer")
 
 First clone the code and installation of the relevant package.
