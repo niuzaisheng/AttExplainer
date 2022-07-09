@@ -29,7 +29,7 @@ If use default training config:
     mkdir saved_weights
     python run_train.py --data_set_name emotion --task_type explain --use_wandb
 
-Other settings can be found in `run_train_explain.py`
+Other settings can be found in `run_train.py`
 
 ### Run per-trained RL agent evaluation process
 
@@ -53,7 +53,7 @@ If use default training config:
     mkdir saved_weights
     nohup python run_train.py --data_set_name emotion --task_type attack --use_wandb
 
-Other settings can be found in `run_train_attack.py`
+Other settings can be found in `run_train.py`
 
 ### Run per-trained RL agent evaluation process
 

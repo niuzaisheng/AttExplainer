@@ -97,6 +97,12 @@ def get_random_attention_features(model_outputs, bins_num):
     batch_size, _, max_seq_len, _ = one_layer_attention.size()
     return torch.rand((batch_size, max_seq_len, 2 * bins_num + 4), device=target_device)
 
+def get_const_attention_features(model_outputs, bins_num):
+    batch_attentions = model_outputs.attentions
+    one_layer_attention = batch_attentions[0]
+    target_device = one_layer_attention.device
+    batch_size, _, max_seq_len, _ = one_layer_attention.size()
+    return torch.ones((batch_size, max_seq_len, 2 * bins_num + 4), device=target_device)
 
 def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_num):
     batch_attentions = model_outputs.attentions

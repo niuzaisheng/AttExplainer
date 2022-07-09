@@ -44,7 +44,7 @@ def parse_args():
     # Game Settings
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
-    parser.add_argument("--use_random_matrix", action="store_true", default=False)
+    parser.add_argument("--features_type", type=str, default="statistical_bin", choices=["statistical_bin","const", "random"],)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
 
@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
     parser.add_argument("--use_wandb", action="store_true", default=False)
-    parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
+    parser.add_argument("--wandb_project_name", type=str, default="attexplaner-dev")
     parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--discribe", type=str, default="DQN model training process")
 
@@ -152,15 +152,18 @@ def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, gam
     return delta_p, post_rewards, ifdone, musked_token_rate, unmusked_token_rate
 
 
-def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, use_random_matrix=False):
+def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
     post_batch = send_to_device(post_batch, lm_device)
     with torch.no_grad():
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        if use_random_matrix:
-            post_attention = get_random_attention_features(post_outputs, config.bins_num)
-        else:
+        if features_type == "statistical_bin":
             post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+        elif features_type == "const":
+            post_attention = get_const_attention_features(post_outputs, config.bins_num)
+        elif features_type == "random":
+            post_attention = get_random_attention_features(post_outputs, config.bins_num)
+
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
 
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
@@ -214,7 +217,7 @@ for epoch in range(config.max_train_epoch):
 
         post_batch, actions, last_game_status = dqn.initial_action(simulate_batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
         all_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
-                                                                                    lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+                                                                                    lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
 
         batch_done_step = []
         cumulative_rewards = None
@@ -223,7 +226,7 @@ for epoch in range(config.max_train_epoch):
 
             post_batch, actions, now_game_status = dqn.choose_action(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
             next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
-                                                                                         lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+                                                                                         lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
             delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_prob, post_acc, post_prob, now_game_status, game_step)
             dqn.store_transition(simulate_batch_size, all_attentions, next_attentions, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
 
