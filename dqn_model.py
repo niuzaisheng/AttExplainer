@@ -67,7 +67,9 @@ def gather2D(tensors: List[Tensor]):
     return out_dict
 
 
-BufferItem = namedtuple("BufferItem", ("all_attentions", "next_attentions", "actions", "game_status", "next_game_status",  "seq_length", "rewards", "ifdone"))
+BufferItem = namedtuple("BufferItem", ("all_attentions", "next_attentions",
+                                       "actions", "game_status", "next_game_status",
+                                       "seq_length", "rewards", "ifdone"))
 
 
 class DQN(object):

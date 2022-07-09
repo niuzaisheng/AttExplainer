@@ -121,7 +121,6 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
     attentions = attentions.masked_fill(~square_attention_mask, -np.inf)
 
     attentions = torch.clamp(attentions, 0, 1)
-    # attentions = torch.sqrt(attentions) # do √x scaling
 
     last = attentions.where(attentions < 0, zeros).bool()
     for i in spans[1:]:

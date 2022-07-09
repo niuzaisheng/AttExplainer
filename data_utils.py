@@ -1,7 +1,6 @@
-import json
+
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 from datasets import load_dataset
 from torch.utils.data.dataloader import DataLoader
@@ -59,8 +58,6 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
         labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
         batch["labels"] = F.one_hot(labels, num_classes=num_labels).float()
 
-    # Handling of all other possible keys.
-    # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
         if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -93,8 +90,6 @@ def double_sentence_data_collator(features, tokenizer, num_labels, problem_type,
         labels = torch.tensor([f["label"] for f in features], dtype=torch.long)
         batch["labels"] = F.one_hot(labels, num_classes=num_labels).float()
 
-    # Handling of all other possible keys.
-    # Again, we will use the first element to figure out which key/values are not None for this model.
     for k, v in first.items():
         if k not in ("label", "label_ids", "idx") and v is not None and not isinstance(v, str):
             if isinstance(v, torch.Tensor):
@@ -140,22 +135,6 @@ def get_dataset_config(config):
         problem_type = "single_label_classification"
         text_col_num = 1
         text_col_name = "sentence"
-        token_quantity_correction = 2
-
-    elif config.data_set_name == "ChnSentiCorp":
-        model_name_or_path = "uer/roberta-base-finetuned-dianping-chinese"
-        label_names = ["negative", "positive"]
-        problem_type = "single_label_classification"
-        text_col_num = 1
-        text_col_name = "text_a"
-        token_quantity_correction = 2
-
-    elif config.data_set_name == "du" :
-        model_name_or_path = "uer/roberta-base-finetuned-dianping-chinese"
-        label_names = ["negative", "positive"]
-        problem_type = "single_label_classification"
-        text_col_num = 1
-        text_col_name = "context"
         token_quantity_correction = 2
 
     else:
@@ -237,34 +216,6 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
-
-    elif config.data_set_name in ["ChnSentiCorp"]:
-        data_files = {"train": "data/du/ChnSentiCorp/train.tsv", "test": "data/du/ChnSentiCorp/dev.tsv"}
-        dataset = load_dataset("csv", data_files=data_files, sep="\t")
-        train_dataset = dataset["train"]
-        eval_dataset = dataset["test"]
-        
-        data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
-
-        from transformers import AutoModelForSequenceClassification
-        teacher_model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
-
-    elif config.data_set_name in ["du"]:
-        dataset = load_dataset("json", data_files={"test":"data/du/data-part-1/senti_ch_part1_pred.txt"})
-        train_dataset = None
-        eval_dataset = dataset["test"]
-
-        data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
-        # if return_simulate_dataloader:
-        #     simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
-
-        from transformers import AutoModelForSequenceClassification
-        teacher_model = AutoModelForSequenceClassification.from_pretrained(model_name_or_path)
-
 
     assert teacher_model.config.num_labels == num_labels
 
