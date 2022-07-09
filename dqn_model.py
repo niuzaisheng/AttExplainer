@@ -9,7 +9,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from accelerate.utils import send_to_device
 import torch.optim as optim
-from per.prioritized_memory import Memory
+from per import Memory
 from torch.nn.utils.rnn import pad_sequence
 
 
