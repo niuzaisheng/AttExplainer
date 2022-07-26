@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from accelerate.utils import send_to_device
 from torch import Tensor
 
+from ei_net import modify_effective_information
+
 
 def get_attention(model_outputs, layer_sets=None):
     """
@@ -104,6 +106,22 @@ def get_const_attention_features(model_outputs, bins_num):
     batch_size, _, max_seq_len, _ = one_layer_attention.size()
     return torch.ones((batch_size, max_seq_len, 2 * bins_num + 4), device=target_device)
 
+def get_EI_attention_features(model_outputs, batch_seq_len):
+    batch_attentions = model_outputs.attentions
+    attentions = torch.cat([torch.mean(layer, dim=1, keepdim=True) for layer in batch_attentions], dim=1)
+    attentions = attentions.mean(1).detach().cpu()
+    batch_size, max_seq_len, _ = attentions.size()
+    target_device = attentions.device
+
+    # [batch_size, max_seq_len] 
+    batch_ei_features = torch.zeros((batch_size, max_seq_len), device=target_device)
+    for i in range(batch_size):
+        vaild_attention = attentions[i, :batch_seq_len[i], :batch_seq_len[i]].numpy()
+        ei_features = modify_effective_information(vaild_attention)
+        batch_ei_features[i, :batch_seq_len[i]] = torch.tensor(ei_features, device=target_device)
+
+    return batch_ei_features
+
 def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_num):
     batch_attentions = model_outputs.attentions
     attentions = torch.cat([torch.mean(layer, dim=1, keepdim=True) for layer in batch_attentions], dim=1)
@@ -151,6 +169,8 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
     stack = torch.cat([stack, statistics], dim=-1)  # [ batch_size, max_seq_len, bins_num * 2 + 4]
     return stack
 
+def get_gradient_features(model_outputs, attention_mask, batch_seq_len, bins_num):
+    pass
 
 def batch_loss(model_output, y_ref, num_labels, device=None):
     loss_fct = nn.CrossEntropyLoss(reduction="none")

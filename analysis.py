@@ -29,15 +29,16 @@ def parse_args():
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
     )
     parser.add_argument("--bins_num", type=int, default=32)
-    parser.add_argument("--use_random_matrix", action="store_true", default=False)
+    parser.add_argument("--features_type", type=str, default="statistical_bin", choices=["statistical_bin","const", "random"],)
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--simulate_batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--use_wandb", action="store_true", default=False)
-    parser.add_argument("--wandb_project_name", type=str, default="attexplaner")
+    parser.add_argument("--wandb_project_name", type=str, default="attexplaner-dev")
     parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--discribe", type=str, default="Model evaluation process")
 
@@ -54,6 +55,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger.info(f"Eval config: {config}")
+set_seed(config.seed)
 lm_device = torch.device("cuda", config.gpu_index)
 
 dataset_config = get_dataset_config(config)
@@ -61,10 +63,23 @@ problem_type = dataset_config["problem_type"]
 num_labels = dataset_config["num_labels"]
 label_names = dataset_config["label_names"]
 text_col_name = dataset_config["text_col_name"]
+
+# the number of [CLS],[SEP] special token in an example
 if isinstance(text_col_name, list):
     token_quantity_correction = 3
 else:
     token_quantity_correction = 2
+
+# Different feature extraction methods will get feature matrices of different dimensions
+# For DQN gather single step data into batch from replay buffer 
+if config.features_type == "statistical_bin":
+    input_feature_shape = 2 # 2D feature map
+elif config.features_type == "const":
+    input_feature_shape = 2 # 2D feature map
+elif config.features_type == "random":
+    input_feature_shape = 2 # 2D feature map
+elif config.features_type == "effective_information":
+    input_feature_shape = 1 # 1D feature map
 
 if config.use_wandb:
     import wandb
@@ -101,24 +116,28 @@ def get_rewards(seq_length, original_acc, original_prob, original_loss, post_acc
     return post_rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
 
 
-def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, use_random_matrix=False):
+def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
     post_batch = send_to_device(post_batch, lm_device)
     with torch.no_grad():
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        if use_random_matrix:
-            post_attention = get_random_attention_features(post_outputs, config.bins_num)
-        else:
-            post_attention = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+        if features_type == "statistical_bin":
+            extracted_features = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+        elif features_type == "const":
+            extracted_features = get_const_attention_features(post_outputs, config.bins_num)
+        elif features_type == "random":
+            extracted_features = get_random_attention_features(post_outputs, config.bins_num)
+
         post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
+
         post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
-    all_attentions = post_attention.unsqueeze(1)
+    now_features = extracted_features.unsqueeze(1)
 
-    return all_attentions, post_acc, post_loss, post_prob, post_pred_labels
+    return now_features, post_acc, post_loss, post_prob, post_pred_labels
 
 
-dqn = DQN_eval(config, MASK_TOKEN_ID)
+dqn = DQN_eval(config, MASK_TOKEN_ID, input_feature_shape)
 
 exp_name = "eval"
 completed_steps = 0
@@ -183,16 +202,16 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
 
     # initial batch
     post_batch, actions, last_game_status, action_value = dqn.initial_action(simulate_batch, special_tokens_mask, seq_length, batch_max_seq_length, lm_device)
-    all_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
-                                                                                lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+    now_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
+                                                                                lm_device=lm_device, dqn_device=dqn.device, features_type = config.features_type)
     for game_step in range(epoch_game_steps):
         game_step_progress_bar.update()
         game_step_progress_bar.set_postfix({"left_examples": simulate_batch_size})
         all_game_step_done_num[game_step].append(1 - simulate_batch_size / simulate_batch_size_at_start)
 
-        post_batch, actions, now_game_status, action_value = dqn.choose_action_for_eval(simulate_batch, seq_length, special_tokens_mask, all_attentions, last_game_status)
-        next_attentions, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
-                                                                                     lm_device=lm_device, dqn_device=dqn.device, use_random_matrix=config.use_random_matrix)
+        post_batch, actions, now_game_status, action_value = dqn.choose_action_for_eval(simulate_batch, seq_length, special_tokens_mask, now_features, last_game_status)
+        next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
+                                                                                     lm_device=lm_device, dqn_device=dqn.device, features_type = config.features_type)
         rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, \
             musked_token_num, unmusk_token_num = get_rewards(seq_length, original_acc, original_prob, original_loss,
                                                              post_acc, post_prob, post_loss, now_game_status, game_step)
@@ -203,13 +222,13 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
             cumulative_rewards += rewards
 
         # Remove those completed samples
-        next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_attentions, \
+        next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_features, \
             next_game_status, next_simulate_batch, next_original_pred_labels, \
             next_token_word_position_map, next_cumulative_rewards, \
             next_original_acc, next_original_loss, next_original_prob, \
             left_delta_p, left_musked_token_rate, left_unmusked_token_rate, \
             removed_index = gather_unfinished_examples(ifdone, simulate_batch_size, seq_length, golden_labels, special_tokens_mask,
-                                                       next_attentions, now_game_status,
+                                                       next_features, now_game_status,
                                                        simulate_batch, original_pred_labels,
                                                        token_word_position_map, cumulative_rewards,
                                                        original_acc, original_loss, original_prob,
@@ -254,7 +273,7 @@ for simulate_step, simulate_batch in enumerate(eval_dataloader):
         seq_length = next_seq_length
         golden_labels = next_golden_labels
         special_tokens_mask = next_special_tokens_mask
-        all_attentions = next_attentions
+        now_features = next_features
         last_game_status = next_game_status
         simulate_batch = next_simulate_batch
         original_loss, original_acc, original_pred_labels, original_prob = next_original_loss, next_original_acc, next_original_pred_labels, next_original_prob

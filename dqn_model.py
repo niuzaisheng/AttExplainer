@@ -1,4 +1,4 @@
-from typing import List
+from typing import Dict, List
 import numpy as np
 import random
 from collections import namedtuple
@@ -43,22 +43,43 @@ class DQNNet(nn.Module):
         x = self.out(x)
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
+class DQNNet1D(nn.Module):
 
-def gather2D(tensors: List[Tensor]):
+    def __init__(self, config):
+        super().__init__()
+        self.layer = nn.Linear(2, 1)
+
+    def forward(self, x, s, seq_len):
+        batch_size, _ , max_seq_len= x.size()
+        x = torch.cat([x, s.unsqueeze(1)], dim=1)  # [B, 2, seq]
+        x = x.transpose(1, 2)  # [B, seq, 2]
+        x = self.layer(x)
+        return x.reshape(batch_size, max_seq_len)  # [B , seq]
+
+
+def gatherND(tensors: List[Dict[str, Tensor]], N=2)->Dict[str, Tensor]:
+    """
+        Gathers tensors from list of dict into dict. 
+        N is the number of features dimensions to gather.
+    """
     out_dict = {}
     first = tensors[0]
     batch_size = len(tensors)
     for k in first.keys():
-        if "attentions" in k or "observation" in k:
-            head_num = first[k].size(0)
-            max_seq_len = max([item[k].size(1) for item in tensors])  # [12 x seq x seq]
-            attentions = []
+        if "features" in k or "attentions" in k or "observation" in k:
+            max_seq_len = max([item[k].size(1) for item in tensors])  # 2D [batch_size x seq x seq] or 1D [batch_size x seq]
+            batch_features = []
             for i, item in enumerate(tensors):
                 item_length = item[k].size(1)
-                temp = F.pad(item[k], (0, 0, 0, max_seq_len-item_length))
-                attentions.append(temp)
-            attentions = torch.stack(attentions)
-            out_dict[k] = attentions
+                if N == 2:
+                    temp = F.pad(item[k], (0, 0, 0, max_seq_len-item_length))
+                elif N == 1:
+                    temp = F.pad(item[k], (0, max_seq_len-item_length))
+                else:
+                    raise ValueError("Number of features dimensions for each example must be 1 or 2")
+                batch_features.append(temp)
+            batch_features = torch.stack(batch_features)
+            out_dict[k] = batch_features
         else:
             if "done" in k or k in ["actions", "rewards"]:
                 out_dict[k] = torch.stack([item[k] for item in tensors])
@@ -67,7 +88,7 @@ def gather2D(tensors: List[Tensor]):
     return out_dict
 
 
-BufferItem = namedtuple("BufferItem", ("all_attentions", "next_attentions",
+BufferItem = namedtuple("BufferItem", ("now_features", "next_features",
                                        "actions", "game_status", "next_game_status",
                                        "seq_length", "rewards", "ifdone"))
 
@@ -77,14 +98,21 @@ class DQN(object):
         DQN progress for training
     """
 
-    def __init__(self, config, mask_token_id=103):
+    def __init__(self, config, mask_token_id=103, input_feature_shape=2):
 
-        self.device = torch.device("cuda", config.gpu_index)
-        # self.device = torch.device("cpu")
+        if config.train_agent_on_GPU:
+            self.device = torch.device("cuda", config.gpu_index)
+        else:
+            self.device = torch.device("cpu")
         self.mask_token_id = mask_token_id
+        self.input_feature_shape = input_feature_shape
 
-        self.eval_net = DQNNet(config)
-        self.target_net = DQNNet(config)
+        if input_feature_shape == 2:
+            self.eval_net = DQNNet(config)
+            self.target_net = DQNNet(config)
+        elif input_feature_shape == 1:
+            self.eval_net = DQNNet1D(config)
+            self.target_net = DQNNet1D(config)
         self.target_net.load_state_dict(self.eval_net.state_dict())
         self.optimizer = optim.Adam(self.eval_net.parameters(), lr=config.dqn_rl)
 
@@ -101,11 +129,11 @@ class DQN(object):
         self.memory = Memory(self.max_memory_capacity)
         self.loss_func = nn.MSELoss(reduce=False)
 
-    def choose_action(self, batch, batch_seq_length, special_tokens_mask, all_attentions, game_status, no_random=False):
+    def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status, no_random=False):
         target_device = batch["input_ids"].device
         self.eval_net.eval()
         with torch.no_grad():
-            actions = self.eval_net(all_attentions, game_status, batch_seq_length).detach()
+            actions = self.eval_net(now_features, game_status, batch_seq_length).detach()
             for i, index in enumerate(batch_seq_length):
                 if no_random is not True and np.random.uniform() > self.epsilon:
                     actions[i] = 0
@@ -151,13 +179,13 @@ class DQN(object):
             game_status[i, index:] = 0
         return batch, actions.to(device), game_status.to(device)
 
-    def store_transition(self, batch_size, all_attentions, next_attentions, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
+    def store_transition(self, batch_size, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
         self.eval_net.eval()
         with torch.no_grad():
-            q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone).detach()
+            q_loss = self.get_td_loss(batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone).detach()
 
-        all_attentions = send_to_device(all_attentions, "cpu")
-        next_attentions = send_to_device(next_attentions, "cpu")
+        now_features = send_to_device(now_features, "cpu")
+        next_features = send_to_device(next_features, "cpu")
         game_status = send_to_device(game_status, "cpu")
         next_game_status = send_to_device(next_game_status, "cpu")
         actions = send_to_device(actions, "cpu")
@@ -167,8 +195,8 @@ class DQN(object):
 
         temp_list = []
         for i in range(batch_size):
-            new_item = BufferItem(all_attentions=all_attentions[i],
-                                  next_attentions=next_attentions[i],
+            new_item = BufferItem(now_features=now_features[i],
+                                  next_features=next_features[i],
                                   actions=actions[i],
                                   game_status=game_status[i],
                                   next_game_status=next_game_status[i],
@@ -179,16 +207,16 @@ class DQN(object):
             temp_list.append(new_item)
             self.memory.add(q_loss[i], temp_list[i])
 
-    def get_td_loss(self, batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone):
+    def get_td_loss(self, batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone):
         ifdone = ifdone.float()
-        q_eval = self.eval_net(all_attentions, game_status, batch_seq_length)
+        q_eval = self.eval_net(now_features, game_status, batch_seq_length)
         max_seq_len = q_eval.size(1)
         actions = F.one_hot(actions, num_classes=max_seq_len).bool()
 
         q_eval = q_eval.masked_select(actions)  # [B, seq, 1]  -> [B, 1]
 
         with torch.no_grad():
-            q_target = self.target_net(next_attentions, next_game_status, batch_seq_length)
+            q_target = self.target_net(next_features, next_game_status, batch_seq_length)
         q_target = q_target.masked_select(actions)
 
         q_target = rewards + self.gamma * (1 - ifdone) * q_target.detach()
@@ -207,10 +235,10 @@ class DQN(object):
 
         samples = [item._asdict() for item in samples]
         batch_seq_length = [item["seq_length"] for item in samples]
-        samples = gather2D(samples)
+        samples = gatherND(samples, self.input_feature_shape)
         samples = send_to_device(samples, self.device)
-        all_attentions = samples["all_attentions"]
-        next_attentions = samples["next_attentions"]
+        now_features = samples["now_features"]
+        next_features = samples["next_features"]
         game_status = samples["game_status"]
         next_game_status = samples["next_game_status"]
         actions = samples["actions"]
@@ -218,7 +246,7 @@ class DQN(object):
         ifdone = samples["ifdone"]
 
         self.eval_net.train()
-        q_loss = self.get_td_loss(batch_seq_length, all_attentions, next_attentions, game_status, next_game_status, actions, rewards, ifdone)
+        q_loss = self.get_td_loss(batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone)
 
         q_loss_detached = q_loss.detach()
         for i in range(self.dqn_batch_size):
@@ -240,21 +268,24 @@ class DQN_eval(object):
         DQN progress for eval
     """
 
-    def __init__(self, config, mask_token_id=103):
+    def __init__(self, config, mask_token_id=103, input_feature_shape=2):
 
         self.device = torch.device("cpu")
-        self.eval_net = DQNNet(config)
+        if input_feature_shape == 2:
+            self.eval_net = DQNNet(config)
+        elif input_feature_shape == 1:
+            self.eval_net = DQNNet1D(config)
+
         self.mask_token_id = mask_token_id
         with open(config.dqn_weights_path, "rb") as f:
             self.eval_net.load_state_dict(torch.load(f, map_location=self.device))
 
-    def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, all_attentions, game_status):
+    def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status):
         target_device = batch["input_ids"].device
-        batch_size, _, seq_len, _ = all_attentions.size()
         self.eval_net.eval()
-        all_attentions = send_to_device(all_attentions, self.device)
+        now_features = send_to_device(now_features, self.device)
         with torch.no_grad():
-            actions = self.eval_net(all_attentions, game_status, batch_seq_length).detach()
+            actions = self.eval_net(now_features, game_status, batch_seq_length).detach()
         actions = actions.masked_fill(special_tokens_mask, -np.inf)
         select_action = torch.argmax(actions, dim=1)  # [B, seq_len]
 

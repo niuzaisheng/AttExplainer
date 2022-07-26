@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from datasets import load_dataset
 from torch.utils.data.dataloader import DataLoader
 from functools import partial
-from model import MyBertForSequenceClassification
+from language_model import MyBertForSequenceClassification
 
 
 def get_token_word_position_map(batch, tokenizer):
