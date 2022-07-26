@@ -18,6 +18,7 @@
 </p>
 
 Code for "AttExplainer: Explain Transformer via Attention by Reinforcement Learning". Published in IJCAI-ECAI 2022.
+ <a href="https://www.ijcai.org/proceedings/2022/0102.pdf"> Link to paper </a>
 
 ![Framework](images/Framework.jpg "The framework of AttExplainer")
 
