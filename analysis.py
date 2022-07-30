@@ -29,7 +29,8 @@ def parse_args():
         "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
     )
     parser.add_argument("--bins_num", type=int, default=32)
-    parser.add_argument("--features_type", type=str, default="statistical_bin", choices=["statistical_bin","const", "random"],)
+    parser.add_argument("--features_type", type=str, default="statistical_bin",
+                        choices=["statistical_bin", "const", "random", "effective_information", "gradient"],)
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--dqn_weights_path", type=str)
@@ -80,6 +81,8 @@ elif config.features_type == "random":
     input_feature_shape = 2 # 2D feature map
 elif config.features_type == "effective_information":
     input_feature_shape = 1 # 1D feature map
+elif config.features_type == "gradient":
+    input_feature_shape = 2  # 2D feature map
 
 if config.use_wandb:
     import wandb
@@ -119,18 +122,26 @@ def get_rewards(seq_length, original_acc, original_prob, original_loss, post_acc
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
     post_batch = send_to_device(post_batch, lm_device)
-    with torch.no_grad():
+    if features_type != "gradient":
+        with torch.no_grad():
+            post_outputs = transformer_model(**post_batch, output_attentions=True)
+            if features_type == "statistical_bin":
+                extracted_features = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+            elif features_type == "const":
+                extracted_features = get_const_attention_features(post_outputs, config.bins_num)
+            elif features_type == "random":
+                extracted_features = get_random_attention_features(post_outputs, config.bins_num)
+            elif features_type == "effective_information":
+                extracted_features = get_EI_attention_features(post_outputs, seq_length)
+
+
+    else:
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        if features_type == "statistical_bin":
-            extracted_features = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
-        elif features_type == "const":
-            extracted_features = get_const_attention_features(post_outputs, config.bins_num)
-        elif features_type == "random":
-            extracted_features = get_random_attention_features(post_outputs, config.bins_num)
+        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], original_pred_labels, embedding_weight_tensor)
+        embedding_weight_tensor.grad.zero_()
 
-        post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
-
-        post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
+    post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
+    post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
     now_features = extracted_features.unsqueeze(1)
 
@@ -162,8 +173,12 @@ all_done_step_unmusk_token_num = defaultdict(list)  # unmask token num in each d
 all_eval_token_length = []
 all_eval_example_num = 0
 
-transformer_model.eval()
 transformer_model = send_to_device(transformer_model, lm_device)
+transformer_model.eval()
+
+if config.features_type == "gradient":
+    embedding_weight_tensor = transformer_model.get_input_embeddings().weight
+    embedding_weight_tensor.requires_grad_(True)
 
 epoch_game_steps = config.max_game_steps
 progress_bar = tqdm(desc="example", total=len(eval_dataloader), disable=config.disable_tqdm)

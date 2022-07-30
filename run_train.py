@@ -42,7 +42,7 @@ def parse_args():
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
-                        choices=["statistical_bin", "const", "random", "effective_information"],)
+                        choices=["statistical_bin", "const", "random", "effective_information", "gradient"],)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
 
@@ -89,6 +89,7 @@ else:
     token_quantity_correction = 2
 
 # For DQN gather single step data into batch from replay buffer
+# input_feature_shape indicates how many dimensions along sequence length
 if config.features_type == "statistical_bin":
     input_feature_shape = 2  # 2D feature map
 elif config.features_type == "const":
@@ -118,9 +119,7 @@ for _, batch in enumerate(simulate_dataloader):
     logger.info(batch)
     break
 
-status_dict = {}
-
-
+status_dict = {} # for tqdm display some info
 def update_dict(name, progress_bar, any_dict, step):
     status_dict.update(any_dict)
     progress_bar.set_postfix(status_dict)
@@ -130,6 +129,7 @@ def update_dict(name, progress_bar, any_dict, step):
 
 def save_result(save_batch_size, completed_steps, original_input_ids, post_input_ids,
                 golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, wandb_result_table):
+    # for wandb save some info
     for i in range(save_batch_size):
         golden_label = golden_labels[i].item()
         golden_label = label_names[golden_label]
@@ -169,22 +169,25 @@ def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, gam
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
     post_batch = send_to_device(post_batch, lm_device)
-    with torch.no_grad():
+    if features_type != "gradient":
+        with torch.no_grad():
+            post_outputs = transformer_model(**post_batch, output_attentions=True)
+            if features_type == "statistical_bin":
+                extracted_features = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
+            elif features_type == "const":
+                extracted_features = get_const_attention_features(post_outputs, config.bins_num)
+            elif features_type == "random":
+                extracted_features = get_random_attention_features(post_outputs, config.bins_num)
+            elif features_type == "effective_information":
+                extracted_features = get_EI_attention_features(post_outputs, seq_length)
+
+    else:
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        if features_type == "statistical_bin":
-            extracted_features = get_attention_features(post_outputs, post_batch["attention_mask"], seq_length, bins_num)
-        elif features_type == "const":
-            extracted_features = get_const_attention_features(post_outputs, config.bins_num)
-        elif features_type == "random":
-            extracted_features = get_random_attention_features(post_outputs, config.bins_num)
-        elif features_type == "effective_information":
-            extracted_features = get_EI_attention_features(post_outputs, seq_length)
-        elif features_type == "gradient":
-            extracted_features = get_gradient_features(post_outputs, post_batch["attention_mask"], seq_length)
+        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], original_pred_labels, embedding_weight_tensor)
+        embedding_weight_tensor.grad.zero_()
 
-        post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
-
-        post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
+    post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
+    post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
 
     now_features = extracted_features.unsqueeze(1)
 
@@ -199,15 +202,19 @@ lm_device = torch.device("cuda", config.gpu_index)
 transformer_model = send_to_device(transformer_model, lm_device)
 transformer_model.eval()
 
+if config.features_type == "gradient":
+    embedding_weight_tensor = transformer_model.get_input_embeddings().weight
+    embedding_weight_tensor.requires_grad_(True)
+
 completed_steps = 0
 for epoch in range(config.max_train_epoch):
     update_dict(exp_name, progress_bar, {"epoch": epoch}, completed_steps)
 
     for simulate_step, simulate_batch in enumerate(simulate_dataloader):
 
-        seq_length = simulate_batch.pop("seq_length")
+        seq_length = simulate_batch.pop("seq_length") # vailid tokens num in each sequence, a list of int 
         batch_max_seq_length = max(seq_length)
-        golden_labels = simulate_batch.pop("labels")
+        golden_labels = simulate_batch.pop("labels") 
         special_tokens_mask = simulate_batch.pop("special_tokens_mask").bool()
         special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
         token_word_position_map = simulate_batch.pop("token_word_position_map")
@@ -238,7 +245,7 @@ for epoch in range(config.max_train_epoch):
                                                                                   lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
 
         batch_done_step = []
-        cumulative_rewards = None
+        cumulative_rewards = 0
 
         for game_step in range(config.max_game_steps):
 
@@ -248,10 +255,7 @@ for epoch in range(config.max_train_epoch):
             delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_prob, post_acc, post_prob, now_game_status, game_step)
             dqn.store_transition(simulate_batch_size, now_features, next_features, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
 
-            if cumulative_rewards is None:
-                cumulative_rewards = rewards
-            else:
-                cumulative_rewards += rewards
+            cumulative_rewards += rewards
 
             # Remove those completed samples
             next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_features, \

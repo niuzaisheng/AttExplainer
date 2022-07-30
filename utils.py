@@ -169,8 +169,20 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
     stack = torch.cat([stack, statistics], dim=-1)  # [ batch_size, max_seq_len, bins_num * 2 + 4]
     return stack
 
-def get_gradient_features(model_outputs, attention_mask, batch_seq_len, bins_num):
-    pass
+def get_gradient_features(model_outputs, batch_seq_len, input_ids, pred_label, embedding_weight_tensor):
+    batch_size = len(batch_seq_len)
+    seq_len = input_ids.size(-1)
+    model_rep_dim = embedding_weight_tensor.size(-1)
+
+    logits = model_outputs.logits
+    logits.backward(torch.ones(logits.size(),device=logits.device))
+    grad = torch.zeros((batch_size, seq_len, model_rep_dim), requires_grad=False)
+    for i in range(batch_size):
+        example_grad = embedding_weight_tensor.grad[input_ids[i]]
+        grad[i] = example_grad
+
+    return grad # [batch_size, seq_len, model_rep_dim]
+
 
 def batch_loss(model_output, y_ref, num_labels, device=None):
     loss_fct = nn.CrossEntropyLoss(reduction="none")

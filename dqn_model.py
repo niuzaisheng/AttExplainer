@@ -45,7 +45,7 @@ class DQNNet(nn.Module):
 
 class DQNNet1D(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, conig):
         super().__init__()
         self.layer = nn.Linear(2, 1)
 
@@ -54,6 +54,21 @@ class DQNNet1D(nn.Module):
         x = torch.cat([x, s.unsqueeze(1)], dim=1)  # [B, 2, seq]
         x = x.transpose(1, 2)  # [B, seq, 2]
         x = self.layer(x)
+        return x.reshape(batch_size, max_seq_len)  # [B , seq]
+
+
+class DQNNet4Grad(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.layer1 = nn.Linear(768, 8)
+        self.out = nn.Linear(8+1, 1)
+
+    def forward(self, x, s, seq_len):
+        batch_size, _, max_seq_len, dim = x.size() # [B, seq, 1, dim]
+        x = self.layer1(x[:,0]) # [B, seq, 8]
+        x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
+        x = self.out(x)  # [B, seq, 1]
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
 
@@ -88,6 +103,38 @@ def gatherND(tensors: List[Dict[str, Tensor]], N=2)->Dict[str, Tensor]:
     return out_dict
 
 
+# def gather_rectangular(tensors: List[Dict[str, Tensor]])->Dict[str, Tensor]:
+#     """
+#         Gathers tensors from list of dict into dict. 
+#         for feature matries, gather_rectangular() convert a list of [seq x dim] into [batch_size x seq x dim]
+#     """
+#     out_dict = {}
+#     first = tensors[0]
+#     batch_size = len(tensors)
+#     for k in first.keys():
+#         if "features" in k or "attentions" in k or "observation" in k:
+#             max_seq_len = max([item[k].size(1) for item in tensors])  # [seq x dim] 
+#             batch_features = []
+#             for i, item in enumerate(tensors):
+#                 item_length = item[k].size(1)
+#                 if N == 2:
+#                     temp = F.pad(item[k], (0, 0, 0, max_seq_len-item_length))
+#                 elif N == 1:
+#                     temp = F.pad(item[k], (0, max_seq_len-item_length))
+#                 else:
+#                     raise ValueError("Number of features dimensions for each example must be 1 or 2")
+#                 batch_features.append(temp)
+#             batch_features = torch.stack(batch_features)
+#             out_dict[k] = batch_features
+#         else:
+#             if "done" in k or k in ["actions", "rewards"]:
+#                 out_dict[k] = torch.stack([item[k] for item in tensors])
+#             elif k != "seq_length":
+#                 out_dict[k] = pad_sequence([item[k] for item in tensors], batch_first=True)
+#     return out_dict
+
+
+
 BufferItem = namedtuple("BufferItem", ("now_features", "next_features",
                                        "actions", "game_status", "next_game_status",
                                        "seq_length", "rewards", "ifdone"))
@@ -107,12 +154,17 @@ class DQN(object):
         self.mask_token_id = mask_token_id
         self.input_feature_shape = input_feature_shape
 
-        if input_feature_shape == 2:
-            self.eval_net = DQNNet(config)
-            self.target_net = DQNNet(config)
-        elif input_feature_shape == 1:
-            self.eval_net = DQNNet1D(config)
-            self.target_net = DQNNet1D(config)
+        if config.features_type == "gradient":
+            self.eval_net = DQNNet4Grad(config)
+            self.target_net = DQNNet4Grad(config)
+        else:
+            if input_feature_shape == 2:
+                self.eval_net = DQNNet(config)
+                self.target_net = DQNNet(config)
+            elif input_feature_shape == 1:
+                self.eval_net = DQNNet1D(config)
+                self.target_net = DQNNet1D(config)
+        
         self.target_net.load_state_dict(self.eval_net.state_dict())
         self.optimizer = optim.Adam(self.eval_net.parameters(), lr=config.dqn_rl)
 
@@ -271,10 +323,13 @@ class DQN_eval(object):
     def __init__(self, config, mask_token_id=103, input_feature_shape=2):
 
         self.device = torch.device("cpu")
-        if input_feature_shape == 2:
-            self.eval_net = DQNNet(config)
-        elif input_feature_shape == 1:
-            self.eval_net = DQNNet1D(config)
+        if config.features_type == "gradient":
+            self.eval_net = DQNNet4Grad(config)
+        else:
+            if input_feature_shape == 2:
+                self.eval_net = DQNNet(config)
+            elif input_feature_shape == 1:
+                self.eval_net = DQNNet1D(config)
 
         self.mask_token_id = mask_token_id
         with open(config.dqn_weights_path, "rb") as f:
