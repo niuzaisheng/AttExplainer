@@ -27,7 +27,7 @@ class DQNNet(nn.Module):
         self.layer2 = nn.Linear(self.h2 + 1, self.h3)
         self.out = nn.Linear(self.h3, 1)
 
-    def forward(self, x, s, seq_len):
+    def forward(self, x, s):
         batch_size, matrix_num, max_seq_len, _ = x.size()
 
         x = x.reshape(batch_size, matrix_num, max_seq_len, self.bins_num * 2 + 4)  # [B, matrix_num, seq, (bins_num * 2 + 4)]
@@ -43,14 +43,15 @@ class DQNNet(nn.Module):
         x = self.out(x)
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
+
 class DQNNet1D(nn.Module):
 
     def __init__(self, conig):
         super().__init__()
         self.layer = nn.Linear(2, 1)
 
-    def forward(self, x, s, seq_len):
-        batch_size, _ , max_seq_len= x.size()
+    def forward(self, x, s):
+        batch_size, _, max_seq_len = x.size()
         x = torch.cat([x, s.unsqueeze(1)], dim=1)  # [B, 2, seq]
         x = x.transpose(1, 2)  # [B, seq, 2]
         x = self.layer(x)
@@ -64,15 +65,15 @@ class DQNNet4Grad(nn.Module):
         self.layer1 = nn.Linear(768, 8)
         self.out = nn.Linear(8+1, 1)
 
-    def forward(self, x, s, seq_len):
-        batch_size, _, max_seq_len, dim = x.size() # [B, seq, 1, dim]
-        x = self.layer1(x[:,0]) # [B, seq, 8]
+    def forward(self, x, s):
+        batch_size, _, max_seq_len, dim = x.size()  # [B, seq, 1, dim]
+        x = self.layer1(x[:, 0])  # [B, seq, 8]
         x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
         x = self.out(x)  # [B, seq, 1]
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
 
-def gatherND(tensors: List[Dict[str, Tensor]], N=2)->Dict[str, Tensor]:
+def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
     """
         Gathers tensors from list of dict into dict. 
         N is the number of features dimensions to gather.
@@ -103,39 +104,8 @@ def gatherND(tensors: List[Dict[str, Tensor]], N=2)->Dict[str, Tensor]:
     return out_dict
 
 
-# def gather_rectangular(tensors: List[Dict[str, Tensor]])->Dict[str, Tensor]:
-#     """
-#         Gathers tensors from list of dict into dict. 
-#         for feature matries, gather_rectangular() convert a list of [seq x dim] into [batch_size x seq x dim]
-#     """
-#     out_dict = {}
-#     first = tensors[0]
-#     batch_size = len(tensors)
-#     for k in first.keys():
-#         if "features" in k or "attentions" in k or "observation" in k:
-#             max_seq_len = max([item[k].size(1) for item in tensors])  # [seq x dim] 
-#             batch_features = []
-#             for i, item in enumerate(tensors):
-#                 item_length = item[k].size(1)
-#                 if N == 2:
-#                     temp = F.pad(item[k], (0, 0, 0, max_seq_len-item_length))
-#                 elif N == 1:
-#                     temp = F.pad(item[k], (0, max_seq_len-item_length))
-#                 else:
-#                     raise ValueError("Number of features dimensions for each example must be 1 or 2")
-#                 batch_features.append(temp)
-#             batch_features = torch.stack(batch_features)
-#             out_dict[k] = batch_features
-#         else:
-#             if "done" in k or k in ["actions", "rewards"]:
-#                 out_dict[k] = torch.stack([item[k] for item in tensors])
-#             elif k != "seq_length":
-#                 out_dict[k] = pad_sequence([item[k] for item in tensors], batch_first=True)
-#     return out_dict
-
-
-
-BufferItem = namedtuple("BufferItem", ("now_features", "next_features",
+BufferItem = namedtuple("BufferItem", ("now_special_tokens_mask", "next_special_tokens_mask",
+                                       "now_features", "next_features",
                                        "actions", "game_status", "next_game_status",
                                        "seq_length", "rewards", "ifdone"))
 
@@ -153,6 +123,7 @@ class DQN(object):
             self.device = torch.device("cpu")
         self.mask_token_id = mask_token_id
         self.input_feature_shape = input_feature_shape
+        self.token_replacement_strategy = config.token_replacement_strategy
 
         if config.features_type == "gradient":
             self.eval_net = DQNNet4Grad(config)
@@ -164,7 +135,7 @@ class DQN(object):
             elif input_feature_shape == 1:
                 self.eval_net = DQNNet1D(config)
                 self.target_net = DQNNet1D(config)
-        
+
         self.target_net.load_state_dict(self.eval_net.state_dict())
         self.optimizer = optim.Adam(self.eval_net.parameters(), lr=config.dqn_rl)
 
@@ -181,18 +152,8 @@ class DQN(object):
         self.memory = Memory(self.max_memory_capacity)
         self.loss_func = nn.MSELoss(reduce=False)
 
-    def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status, no_random=False):
-        target_device = batch["input_ids"].device
-        self.eval_net.eval()
-        with torch.no_grad():
-            actions = self.eval_net(now_features, game_status, batch_seq_length).detach()
-            for i, index in enumerate(batch_seq_length):
-                if no_random is not True and np.random.uniform() > self.epsilon:
-                    actions[i] = 0
-                    actions[i][random.randint(0, index-1)] = 1
-
+    def select_action_by_policy(self, actions, special_tokens_mask):
         actions = actions.masked_fill(special_tokens_mask, -np.inf)
-
         if self.use_categorical_policy:
             # categorical policy
             actions = torch.softmax(actions, dim=1)
@@ -200,28 +161,69 @@ class DQN(object):
             select_action = m.sample()
         else:
             # argmax policy
-            select_action = torch.argmax(actions, dim=1)  # [B, seq_len]
+            select_action = torch.argmax(actions, dim=1)  # [B, seq_len] -> [B]
+        return select_action
 
-        next_game_status = game_status.clone()
-        for i, position in enumerate(select_action):
-            if game_status[i, position] == 0:
-                next_game_status[i, position] = 1
-            else:
-                next_game_status[i, position] = 0
+    def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status, no_random=False):
+        target_device = batch["input_ids"].device
+        self.eval_net.eval()
+        now_features = send_to_device(now_features, self.device)
+        game_status = send_to_device(game_status, self.device)
+        special_tokens_mask = send_to_device(special_tokens_mask, self.device)
 
-        mask_map = next_game_status == 1
-
-        # On target device:
-        mask_map = mask_map.to(target_device)
-        post_input_ids = batch["input_ids"].clone()
-        post_input_ids = post_input_ids.masked_fill(~mask_map, self.mask_token_id)
+        with torch.no_grad():
+            actions = self.eval_net(now_features, game_status).detach()
 
         for i, index in enumerate(batch_seq_length):
-            post_input_ids[i, index:] = 0
+            if no_random is not True and np.random.uniform() > self.epsilon:
+                actions[i] = 0
+                actions[i][random.randint(0, index-1)] = 1
 
-        post_batch = {"input_ids": post_input_ids, "attention_mask": batch["attention_mask"], "token_type_ids": batch["token_type_ids"]}
+        select_action = self.select_action_by_policy(actions, special_tokens_mask)
 
-        return post_batch, select_action, next_game_status
+        if self.token_replacement_strategy == "mask":
+            next_game_status = game_status.clone()
+            for i, position in enumerate(select_action):
+                if game_status[i, position] == 0:
+                    next_game_status[i, position] = 1
+                else:
+                    next_game_status[i, position] = 0
+
+            mask_map = next_game_status == 1
+            # On target device:
+            mask_map = mask_map.to(target_device)
+            post_input_ids = batch["input_ids"].clone()
+            post_input_ids = post_input_ids.masked_fill(~mask_map, self.mask_token_id)
+
+            for i, index in enumerate(batch_seq_length):
+                post_input_ids[i, index:] = 0
+
+            post_batch = {"input_ids": post_input_ids, "attention_mask": batch["attention_mask"], "token_type_ids": batch["token_type_ids"]}
+            next_special_tokens_mask = special_tokens_mask
+
+        elif self.token_replacement_strategy == "delete":
+
+            batch_size, last_max_seq_len = batch["input_ids"].shape
+            post_input_ids = torch.zeros((batch_size, last_max_seq_len-1), dtype=torch.long, device=target_device)
+            post_attention_mask = torch.zeros((batch_size, last_max_seq_len-1), dtype=torch.long, device=target_device)
+            post_token_type_ids = torch.zeros((batch_size, last_max_seq_len-1), dtype=torch.long, device=target_device)
+            next_special_tokens_mask = torch.zeros((batch_size, last_max_seq_len-1), dtype=torch.bool, device=target_device)
+
+            for i, index in enumerate(batch_seq_length):
+                select_action_index = select_action[i].item()
+                post_input_ids[i, 0: select_action_index] = batch["input_ids"][i, 0: select_action_index]
+                post_input_ids[i, select_action_index:] = batch["input_ids"][i, select_action_index+1:]
+                post_attention_mask[i, 0: select_action_index] = batch["attention_mask"][i, 0: select_action_index]
+                post_attention_mask[i, select_action_index:] = batch["attention_mask"][i, select_action_index+1:]
+                post_token_type_ids[i, 0: select_action_index] = batch["token_type_ids"][i, 0: select_action_index]
+                post_token_type_ids[i, select_action_index:] = batch["token_type_ids"][i, select_action_index+1:]
+                next_special_tokens_mask[i, 0: select_action_index] = special_tokens_mask[i, 0: select_action_index]
+                next_special_tokens_mask[i, select_action_index:] = special_tokens_mask[i, select_action_index+1:]
+
+            post_batch = {"input_ids": post_input_ids, "attention_mask": post_attention_mask, "token_type_ids": post_token_type_ids}
+            next_game_status = post_attention_mask
+
+        return post_batch, select_action, next_game_status, next_special_tokens_mask
 
     def initial_action(self, batch, special_tokens_mask, seq_length, batch_max_seq_length, device):
         batch_size = len(seq_length)
@@ -229,13 +231,15 @@ class DQN(object):
         game_status = torch.ones((batch_size, batch_max_seq_length))
         for i, index in enumerate(seq_length):
             game_status[i, index:] = 0
-        return batch, actions.to(device), game_status.to(device)
+        return actions.to(device), game_status.to(device)
 
-    def store_transition(self, batch_size, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
+    def store_transition(self, batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
         self.eval_net.eval()
         with torch.no_grad():
-            q_loss = self.get_td_loss(batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone).detach()
+            q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone).detach()
 
+        now_special_tokens_mask = send_to_device(now_special_tokens_mask, "cpu")
+        next_special_tokens_mask = send_to_device(next_special_tokens_mask, "cpu")
         now_features = send_to_device(now_features, "cpu")
         next_features = send_to_device(next_features, "cpu")
         game_status = send_to_device(game_status, "cpu")
@@ -245,9 +249,10 @@ class DQN(object):
         ifdone = send_to_device(ifdone, "cpu")
         q_loss = send_to_device(q_loss, "cpu").numpy()
 
-        temp_list = []
         for i in range(batch_size):
-            new_item = BufferItem(now_features=now_features[i],
+            new_item = BufferItem(now_special_tokens_mask=now_special_tokens_mask[i],
+                                  next_special_tokens_mask=next_special_tokens_mask[i],
+                                  now_features=now_features[i],
                                   next_features=next_features[i],
                                   actions=actions[i],
                                   game_status=game_status[i],
@@ -256,26 +261,36 @@ class DQN(object):
                                   rewards=rewards[i],
                                   ifdone=ifdone[i],
                                   )
-            temp_list.append(new_item)
-            self.memory.add(q_loss[i], temp_list[i])
+            self.memory.add(q_loss[i], new_item)
 
-    def get_td_loss(self, batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone):
+    def get_td_loss(self, batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone):
         ifdone = ifdone.float()
-        q_eval = self.eval_net(now_features, game_status, batch_seq_length)
-        max_seq_len = q_eval.size(1)
-        actions = F.one_hot(actions, num_classes=max_seq_len).bool()
-
-        q_eval = q_eval.masked_select(actions)  # [B, seq, 1]  -> [B, 1]
+        now_features = send_to_device(now_features, self.device)
+        game_status = send_to_device(game_status, self.device)
+        q_eval = self.eval_net(now_features, game_status)
+        # max_seq_len = q_eval.size(1)
+        # actions = F.one_hot(actions, num_classes=max_seq_len).bool()
+        # q_eval = q_eval.masked_select(actions)  # [B, seq, 1]  -> [B, 1]
+        q_eval = q_eval.gather(1, actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
         with torch.no_grad():
-            q_target = self.target_net(next_features, next_game_status, batch_seq_length)
-        q_target = q_target.masked_select(actions)
+            next_special_tokens_mask = send_to_device(next_special_tokens_mask, self.device)
+            next_features = send_to_device(next_features, self.device)
+            next_game_status = send_to_device(next_game_status, self.device)
+            q_target = self.target_net(next_features, next_game_status)
+            # target_actions = actions.masked_fill(next_special_tokens_mask, -np.inf)
+            # target_actions = torch.argmax(target_actions, dim=1)  # [B, seq_len] -> [B]
+            target_actions = self.select_action_by_policy(q_target, next_special_tokens_mask)
+            # target_actions = F.one_hot(target_actions, num_classes=max_seq_len).bool()
+            # q_target = q_target.masked_select(target_actions)  # [B, seq, 1]  -> [B, 1]
+            q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
+        # q_target = q_target.masked_select(actions)
         q_target = rewards + self.gamma * (1 - ifdone) * q_target.detach()
 
-        q_loss = self.loss_func(q_eval, q_target)   # [B, seq]
+        q_loss = self.loss_func(q_eval, q_target)   # [B]
 
-        return q_loss  # [B] [B, seq] [B, seq]
+        return q_loss
 
     def learn(self):
         if self.learn_step_counter % self.target_replace_iter == 0:
@@ -284,11 +299,15 @@ class DQN(object):
 
         samples, sample_idxs, is_weight = self.memory.sample(self.dqn_batch_size)
         is_weight = torch.FloatTensor(is_weight).reshape(self.dqn_batch_size, 1).to(self.device)
-
-        samples = [item._asdict() for item in samples]
+        samples = [item._asdict() for item in samples if isinstance(item, BufferItem)]
+        valid_sample_num = len(samples)
+        if valid_sample_num == 0:
+            return 0
         batch_seq_length = [item["seq_length"] for item in samples]
         samples = gatherND(samples, self.input_feature_shape)
         samples = send_to_device(samples, self.device)
+        now_special_tokens_mask = samples["now_special_tokens_mask"]
+        next_special_tokens_mask = samples["next_special_tokens_mask"]
         now_features = samples["now_features"]
         next_features = samples["next_features"]
         game_status = samples["game_status"]
@@ -298,10 +317,10 @@ class DQN(object):
         ifdone = samples["ifdone"]
 
         self.eval_net.train()
-        q_loss = self.get_td_loss(batch_seq_length, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone)
+        q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone)
 
         q_loss_detached = q_loss.detach()
-        for i in range(self.dqn_batch_size):
+        for i in range(valid_sample_num):
             idx = sample_idxs[i]
             self.memory.update(idx, q_loss_detached[i].item())
 
@@ -338,9 +357,10 @@ class DQN_eval(object):
     def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status):
         target_device = batch["input_ids"].device
         self.eval_net.eval()
-        now_features = send_to_device(now_features, self.device)
         with torch.no_grad():
-            actions = self.eval_net(now_features, game_status, batch_seq_length).detach()
+            now_features = send_to_device(now_features, self.device)
+            game_status = send_to_device(game_status, self.device)
+            actions = self.eval_net(now_features, game_status).detach()
         actions = actions.masked_fill(special_tokens_mask, -np.inf)
         select_action = torch.argmax(actions, dim=1)  # [B, seq_len]
 

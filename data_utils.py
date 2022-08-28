@@ -178,7 +178,7 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         eval_dataset = dataset["eval"]
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
         if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
+            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
         eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         from transformers import BertModelWithHeads
@@ -199,7 +199,7 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
 
         data_collator = partial(double_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name1=text_col_name[0], text_col_name2=text_col_name[1])
         if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
+            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
         eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
@@ -212,7 +212,7 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
 
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
         if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.simulate_batch_size)
+            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
         eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)

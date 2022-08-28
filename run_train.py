@@ -45,13 +45,14 @@ def parse_args():
                         choices=["statistical_bin", "const", "random", "effective_information", "gradient"],)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
+    parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
 
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--train_agent_on_GPU", type=bool, default=False)
     parser.add_argument("--max_train_epoch", type=int, default=1000)
     parser.add_argument("--save_step_iter", type=int, default=10000)
-    parser.add_argument("--simulate_batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
     parser.add_argument("--use_wandb", action="store_true", default=False)
     parser.add_argument("--wandb_project_name", type=str, default="attexplaner-dev")
@@ -143,13 +144,12 @@ def save_result(save_batch_size, completed_steps, original_input_ids, post_input
         wandb_result_table.add_data(completed_steps, golden_label, original_pred_label, post_pred_label, item_delta_p, train_batch_input_ids_example, post_batch_input_ids_example)
 
 
-def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, game_step):
+def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_status, game_step):
 
-    seq_length = torch.FloatTensor(seq_length) - token_quantity_correction
-    seq_length = seq_length.to(game_status.device)
+    original_seq_length = original_seq_length.to(game_status.device)
     unmusk_token_num = game_status.sum(dim=1) - token_quantity_correction
-    unmusked_token_rate = unmusk_token_num / seq_length
-    musked_token_num = seq_length - unmusk_token_num
+    unmusked_token_rate = unmusk_token_num / original_seq_length
+    musked_token_num = original_seq_length - unmusk_token_num
     musked_token_rate = 1 - unmusked_token_rate
     delta_p = (original_prob - post_prob)
 
@@ -163,6 +163,10 @@ def get_rewards(seq_length, original_prob, post_acc, post_prob, game_status, gam
         # post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
         post_rewards = 10 * delta_p
 
+    for i in range(unmusk_token_num.size(0)):
+        if unmusk_token_num[i] == 1:
+            ifdone[i] = 1
+    
     return delta_p, post_rewards, ifdone, musked_token_rate, unmusked_token_rate
 
 
@@ -210,70 +214,62 @@ completed_steps = 0
 for epoch in range(config.max_train_epoch):
     update_dict(exp_name, progress_bar, {"epoch": epoch}, completed_steps)
 
-    for simulate_step, simulate_batch in enumerate(simulate_dataloader):
+    for simulate_step, batch in enumerate(simulate_dataloader):
 
-        seq_length = simulate_batch.pop("seq_length") # vailid tokens num in each sequence, a list of int 
+        seq_length = batch.pop("seq_length") # vailid tokens num in each sequence, a list of int 
         batch_max_seq_length = max(seq_length)
-        golden_labels = simulate_batch.pop("labels") 
-        special_tokens_mask = simulate_batch.pop("special_tokens_mask").bool()
+        golden_labels = batch.pop("labels") 
+        special_tokens_mask = batch.pop("special_tokens_mask").bool()
         special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
-        token_word_position_map = simulate_batch.pop("token_word_position_map")
-        simulate_batch = send_to_device(simulate_batch, lm_device)
+        token_word_position_map = batch.pop("token_word_position_map")
+        batch = send_to_device(batch, lm_device)
 
         with torch.no_grad():
-            original_outputs = transformer_model(**simulate_batch, output_attentions=True)
+            original_outputs = transformer_model(**batch, output_attentions=True)
 
         original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
         update_dict(exp_name, progress_bar, {"original_prob": original_prob.mean().item()}, completed_steps)
 
-        simulate_batch_size = len(seq_length)
+        batch_size = len(seq_length)
         if config.do_pre_deletion:
-            simulate_batch_size, seq_length, special_tokens_mask, simulate_batch, \
+            batch_size, seq_length, special_tokens_mask, batch, \
                 original_loss, original_acc, original_pred_labels, original_prob = \
-                gather_correct_examples(original_acc, simulate_batch_size, seq_length, special_tokens_mask, simulate_batch,
+                gather_correct_examples(original_acc, batch_size, seq_length, special_tokens_mask, batch,
                                         original_loss, original_pred_labels, original_prob)
-        if simulate_batch_size == 0:
+        if batch_size == 0:
             continue
 
-        simulate_batch_size = len(seq_length)
-        simulate_batch_size_at_start = len(seq_length)
+        batch_size = len(seq_length)
+        batch_size_at_start = len(seq_length)
+        original_seq_length = torch.FloatTensor(seq_length) - token_quantity_correction
 
-        post_batch, actions, last_game_status = dqn.initial_action(simulate_batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
-        now_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, simulate_batch, seq_length, config.bins_num,
+        actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
+        now_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, batch, seq_length, config.bins_num,
                                                                                   lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
 
         batch_done_step = []
         cumulative_rewards = 0
+        now_special_tokens_mask = special_tokens_mask
 
         for game_step in range(config.max_game_steps):
 
-            post_batch, actions, now_game_status = dqn.choose_action(simulate_batch, seq_length, special_tokens_mask, now_features, last_game_status)
+            post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, now_special_tokens_mask, now_features, now_game_status)
             next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                        lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
-            delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(seq_length, original_prob, post_acc, post_prob, now_game_status, game_step)
-            dqn.store_transition(simulate_batch_size, now_features, next_features, last_game_status, now_game_status, actions, seq_length, rewards, ifdone)
+            delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
+
+            dqn.store_transition(batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
 
             cumulative_rewards += rewards
-
-            # Remove those completed samples
-            next_simulate_batch_size, next_seq_length, next_golden_labels, next_special_tokens_mask, next_features, \
-                next_game_status, next_simulate_batch, next_original_pred_labels, \
-                next_token_word_position_map, next_cumulative_rewards, \
-                next_original_acc, next_original_loss, next_original_prob, removed_index = \
-                gather_unfinished_examples(ifdone, simulate_batch_size, seq_length, golden_labels, special_tokens_mask,
-                                           next_features, now_game_status,
-                                           simulate_batch, original_pred_labels,
-                                           token_word_position_map, cumulative_rewards,
-                                           original_acc, original_loss, original_prob)
-
+            removed_index = [i for i in range(batch_size) if ifdone[i].item() == 1]
             if len(removed_index) != 0:
                 batch_done_step.extend([game_step for _ in range(len(removed_index))])
                 if completed_steps % 10 == 0:
                     finished_index = removed_index
-                    fidelity_plus, _ = compute_fidelity(transformer_model, finished_index, simulate_batch,
-                                                        special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+                    fidelity_plus, _ = compute_fidelity(transformer_model, finished_index, batch,
+                                                        now_special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
 
                     update_dict(exp_name, progress_bar, {
                         "done_rewards": rewards[removed_index].mean().item(),
@@ -288,7 +284,7 @@ for epoch in range(config.max_train_epoch):
                 if completed_steps % 10 == 0:
                     if config.use_wandb:
                         save_result(len(removed_index), completed_steps,
-                                    simulate_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                                    batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                                     golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                                     delta_p[removed_index], tokenizer, wandb_result_table)
 
@@ -304,17 +300,20 @@ for epoch in range(config.max_train_epoch):
                     "game_step": game_step,
                 }, step=completed_steps)
 
-            # Parpare for next game step
-            simulate_batch_size = next_simulate_batch_size
-            seq_length = next_seq_length
-            golden_labels = next_golden_labels
-            special_tokens_mask = next_special_tokens_mask
-            now_features = next_features
-            last_game_status = next_game_status
-            simulate_batch = next_simulate_batch
-            original_loss, original_acc, original_pred_labels, original_prob = next_original_loss, next_original_acc, next_original_pred_labels, next_original_prob
-            token_word_position_map = next_token_word_position_map
-            cumulative_rewards = next_cumulative_rewards
+
+            # Remove those completed samples and parpare for next game step
+            batch_size, seq_length, original_seq_length, golden_labels, now_special_tokens_mask, now_features, \
+                now_game_status, batch, original_pred_labels, \
+                token_word_position_map, cumulative_rewards, \
+                original_acc, original_loss, original_prob = \
+                gather_unfinished_examples(ifdone, batch_size, seq_length, original_seq_length, golden_labels, next_special_tokens_mask,
+                                           next_features, next_game_status,
+                                           post_batch, original_pred_labels,
+                                           token_word_position_map, cumulative_rewards,
+                                           original_acc, original_loss, original_prob)
+
+            if config.token_replacement_strategy == "delete":
+                seq_length = [ x - 1 for x in seq_length]
 
             completed_steps += 1
 
@@ -334,19 +333,19 @@ for epoch in range(config.max_train_epoch):
                     wandb.log({"input_ids": wandb_result_table})
                     wandb_result_table = wandb.Table(columns=table_columns)
 
-            if simulate_batch_size == 0:
+            if batch_size == 0:
                 update_dict(exp_name, progress_bar, {"all_done_step": game_step}, step=completed_steps)
                 break
 
-        if simulate_batch_size != 0:
+        if batch_size != 0:
             # Can't reach finish status examples.
             if config.use_wandb:
-                save_result(simulate_batch_size, completed_steps,
-                            simulate_batch["input_ids"], post_batch["input_ids"],
+                save_result(batch_size, completed_steps,
+                            batch["input_ids"], post_batch["input_ids"],
                             golden_labels, original_pred_labels, post_pred_labels,
                             delta_p, tokenizer, wandb_result_table)
 
-        done_rate = 1 - simulate_batch_size / simulate_batch_size_at_start
+        done_rate = 1 - batch_size / batch_size_at_start
         update_dict(exp_name, progress_bar, {"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
         progress_bar.update(1)
 

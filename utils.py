@@ -276,8 +276,9 @@ def compute_fidelity(original_model, finished_index, simulate_batch, special_tok
 
 
 def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_length: List,
+                               original_seq_length: Tensor,
                                golden_labels: Tensor,
-                               special_tokens_mask: Tensor,
+                               next_special_tokens_mask: Tensor,
                                next_attentions: Tensor,
                                now_game_status: Tensor,
                                simulate_batch: Dict[str, Tensor],
@@ -293,8 +294,8 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
                                ):
 
     left_index = [i for i in range(simulate_batch_size) if ifdone[i].item() == 0]
-    removed_index = [i for i in range(simulate_batch_size) if ifdone[i].item() == 1]
     left_seq_length = [value for i, value in enumerate(seq_length) if i in left_index]
+    left_original_seq_length = original_seq_length[left_index]
     left_golden_labels = golden_labels[left_index]
     left_next_attentions = next_attentions[left_index]
     left_next_game_status = now_game_status[left_index]
@@ -302,7 +303,7 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
     left_original_acc = original_acc[left_index]
     left_original_loss = original_loss[left_index]
     left_original_prob = original_prob[left_index]
-    left_special_tokens_mask = special_tokens_mask[left_index]
+    left_next_special_tokens_mask = next_special_tokens_mask[left_index]
     left_token_word_position_map = [v for i, v in enumerate(token_word_position_map) if i in left_index]
     left_cumulative_rewards = cumulative_rewards[left_index]
 
@@ -315,15 +316,13 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
         left_musked_token_rate = musked_token_rate[left_index]
         left_unmusked_token_rate = unmusked_token_rate[left_index]
 
-        return len(left_index), left_seq_length, left_golden_labels, left_special_tokens_mask, \
+        return len(left_index), left_seq_length, left_original_seq_length, left_golden_labels,left_next_special_tokens_mask, \
             left_next_attentions, left_next_game_status, next_simulate_batch, \
             left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
             left_original_acc, left_original_loss, left_original_prob, \
-            left_delta_p, left_musked_token_rate, left_unmusked_token_rate, \
-            removed_index
+            left_delta_p, left_musked_token_rate, left_unmusked_token_rate
     else:
-        return len(left_index), left_seq_length, left_golden_labels, left_special_tokens_mask, \
+        return len(left_index), left_seq_length, left_original_seq_length, left_golden_labels, left_next_special_tokens_mask, \
             left_next_attentions, left_next_game_status, next_simulate_batch, \
             left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
-            left_original_acc, left_original_loss, left_original_prob, \
-            removed_index
+            left_original_acc, left_original_loss, left_original_prob
