@@ -1,19 +1,21 @@
 # Model interpretability training process
-import sys
-import os
-import logging
 import argparse
+import copy
+import datetime
+import logging
+import os
+import sys
+
 import numpy as np
 import torch
-import datetime
-
-from tqdm.auto import tqdm
 from accelerate.utils import send_to_device
+from tqdm.auto import tqdm
 from transformers import AutoTokenizer, set_seed
+
 from data_utils import get_dataloader_and_model, get_dataset_config
 from dqn_model import DQN
 from utils import *
-import datetime
+
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +51,7 @@ def parse_args():
 
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
-    parser.add_argument("--train_agent_on_GPU", type=bool, default=False)
+    parser.add_argument("--is_agent_on_GPU", type=bool, default=False)
     parser.add_argument("--max_train_epoch", type=int, default=1000)
     parser.add_argument("--save_step_iter", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=32)
@@ -120,7 +122,9 @@ for _, batch in enumerate(simulate_dataloader):
     logger.info(batch)
     break
 
-status_dict = {} # for tqdm display some info
+status_dict = {}  # for tqdm display some info
+
+
 def update_dict(name, progress_bar, any_dict, step):
     status_dict.update(any_dict)
     progress_bar.set_postfix(status_dict)
@@ -146,7 +150,7 @@ def save_result(save_batch_size, completed_steps, original_input_ids, post_input
 
 def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_status, game_step):
 
-    original_seq_length = original_seq_length.to(game_status.device)
+    original_seq_length = (torch.FloatTensor(original_seq_length) - token_quantity_correction).to(game_status.device)
     unmusk_token_num = game_status.sum(dim=1) - token_quantity_correction
     unmusked_token_rate = unmusk_token_num / original_seq_length
     musked_token_num = original_seq_length - unmusk_token_num
@@ -166,7 +170,7 @@ def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_st
     for i in range(unmusk_token_num.size(0)):
         if unmusk_token_num[i] == 1:
             ifdone[i] = 1
-    
+
     return delta_p, post_rewards, ifdone, musked_token_rate, unmusked_token_rate
 
 
@@ -214,11 +218,11 @@ completed_steps = 0
 for epoch in range(config.max_train_epoch):
     update_dict(exp_name, progress_bar, {"epoch": epoch}, completed_steps)
 
-    for simulate_step, batch in enumerate(simulate_dataloader):
+    for step, batch in enumerate(simulate_dataloader):
 
-        seq_length = batch.pop("seq_length") # vailid tokens num in each sequence, a list of int 
+        seq_length = batch.pop("seq_length")  # vailid tokens num in each sequence, a list of int
         batch_max_seq_length = max(seq_length)
-        golden_labels = batch.pop("labels") 
+        golden_labels = batch.pop("labels")
         special_tokens_mask = batch.pop("special_tokens_mask").bool()
         special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
         token_word_position_map = batch.pop("token_word_position_map")
@@ -243,7 +247,7 @@ for epoch in range(config.max_train_epoch):
 
         batch_size = len(seq_length)
         batch_size_at_start = len(seq_length)
-        original_seq_length = torch.FloatTensor(seq_length) - token_quantity_correction
+        original_seq_length = copy.deepcopy(seq_length)
 
         actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
         now_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, batch, seq_length, config.bins_num,
@@ -251,25 +255,24 @@ for epoch in range(config.max_train_epoch):
 
         batch_done_step = []
         cumulative_rewards = 0
-        now_special_tokens_mask = special_tokens_mask
 
         for game_step in range(config.max_game_steps):
 
-            post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, now_special_tokens_mask, now_features, now_game_status)
+            post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
             next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                        lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
             delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
 
-            dqn.store_transition(batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
+            dqn.store_transition(batch_size, special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
 
             cumulative_rewards += rewards
             removed_index = [i for i in range(batch_size) if ifdone[i].item() == 1]
             if len(removed_index) != 0:
-                batch_done_step.extend([game_step for _ in range(len(removed_index))])
+                batch_done_step.extend([game_step] * len(removed_index))
                 if completed_steps % 10 == 0:
                     finished_index = removed_index
-                    fidelity_plus, _ = compute_fidelity(transformer_model, finished_index, batch,
-                                                        now_special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+                    fidelity_plus, _ = compute_fidelity_when_masked(transformer_model, finished_index, batch,
+                                                        special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
 
                     update_dict(exp_name, progress_bar, {
                         "done_rewards": rewards[removed_index].mean().item(),
@@ -300,9 +303,8 @@ for epoch in range(config.max_train_epoch):
                     "game_step": game_step,
                 }, step=completed_steps)
 
-
             # Remove those completed samples and parpare for next game step
-            batch_size, seq_length, original_seq_length, golden_labels, now_special_tokens_mask, now_features, \
+            batch_size, seq_length, original_seq_length, golden_labels, special_tokens_mask, now_features, \
                 now_game_status, batch, original_pred_labels, \
                 token_word_position_map, cumulative_rewards, \
                 original_acc, original_loss, original_prob = \
@@ -313,7 +315,7 @@ for epoch in range(config.max_train_epoch):
                                            original_acc, original_loss, original_prob)
 
             if config.token_replacement_strategy == "delete":
-                seq_length = [ x - 1 for x in seq_length]
+                seq_length = [x-1 for x in seq_length]
 
             completed_steps += 1
 

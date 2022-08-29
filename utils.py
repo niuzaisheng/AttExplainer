@@ -241,7 +241,7 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
-def compute_fidelity(original_model, finished_index, simulate_batch, special_tokens_mask,
+def compute_fidelity_when_masked(original_model, finished_index, simulate_batch, special_tokens_mask,
                      game_status, original_pred_labels, lm_device, mask_token_id=103):
 
     fidelity_plus_batch = {}
@@ -252,6 +252,7 @@ def compute_fidelity(original_model, finished_index, simulate_batch, special_tok
 
     finish_game_status = game_status[finished_index]
     finish_special_tokens_mask = special_tokens_mask[finished_index]
+    finish_special_tokens_mask = send_to_device(finish_special_tokens_mask, finish_game_status.device)
     finish_original_pred_labels = original_pred_labels[finished_index]
 
     fidelity_plus_mask = ~finish_game_status.bool()
@@ -261,7 +262,6 @@ def compute_fidelity(original_model, finished_index, simulate_batch, special_tok
     fidelity_minus_mask = finish_game_status.bool()
     fidelity_minus_mask = fidelity_minus_mask.masked_fill(finish_special_tokens_mask, False)
     fidelity_minus_mask = send_to_device(fidelity_minus_mask, lm_device)
-
     fidelity_plus_batch["input_ids"] = torch.masked_fill(fidelity_plus_batch["input_ids"], fidelity_plus_mask, mask_token_id)
     fidelity_minus_batch["input_ids"] = torch.masked_fill(fidelity_minus_batch["input_ids"], fidelity_minus_mask, mask_token_id)
 
@@ -273,6 +273,34 @@ def compute_fidelity(original_model, finished_index, simulate_batch, special_tok
     fidelity_minus_acc, finish_pred_labels, _ = batch_accuracy(fidelity_minus_outputs, finish_original_pred_labels, device="cpu")
 
     return fidelity_plus_acc, fidelity_minus_acc
+
+def compute_fidelity_when_deleted(original_model, finished_index, simulate_batch, special_tokens_mask,
+                     game_status, original_pred_labels, lm_device):
+
+    fidelity_plus_batch = {}
+    for key in simulate_batch.keys():
+        fidelity_plus_batch[key] = simulate_batch[key][finished_index]
+
+    finish_game_status = game_status[finished_index]
+    finish_special_tokens_mask = special_tokens_mask[finished_index]
+    finish_special_tokens_mask = send_to_device(finish_special_tokens_mask, finish_game_status.device)
+    finish_original_pred_labels = original_pred_labels[finished_index]
+
+    fidelity_plus_mask = ~finish_game_status.bool()
+    fidelity_plus_mask = fidelity_plus_mask.masked_fill(finish_special_tokens_mask, False)
+    fidelity_plus_mask = send_to_device(fidelity_plus_mask, lm_device)
+
+    fidelity_minus_mask = finish_game_status.bool()
+    fidelity_minus_mask = fidelity_minus_mask.masked_fill(finish_special_tokens_mask, False)
+    fidelity_minus_mask = send_to_device(fidelity_minus_mask, lm_device)
+
+    with torch.no_grad():
+        fidelity_plus_outputs = original_model(**fidelity_plus_batch)
+
+    fidelity_plus_acc, finish_pred_labels, _ = batch_reversed_accuracy(fidelity_plus_outputs, finish_original_pred_labels, device="cpu")
+
+    return fidelity_plus_acc
+
 
 
 def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_length: List,
@@ -295,7 +323,8 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
 
     left_index = [i for i in range(simulate_batch_size) if ifdone[i].item() == 0]
     left_seq_length = [value for i, value in enumerate(seq_length) if i in left_index]
-    left_original_seq_length = original_seq_length[left_index]
+    left_original_seq_length = [value for i, value in enumerate(original_seq_length) if i in left_index]
+    # left_original_seq_length = original_seq_length[left_index]
     left_golden_labels = golden_labels[left_index]
     left_next_attentions = next_attentions[left_index]
     left_next_game_status = now_game_status[left_index]
