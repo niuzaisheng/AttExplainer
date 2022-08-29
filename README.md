@@ -91,3 +91,19 @@ Other settings can be found in `run_train.py`
 
     The results of the experiment depend on many factors: equipments, environments, software versions. I do not guarantee that it will be able to reproduce the exact same values in all cases. But the overall trend is constant.
 
+## Citation
+
+    @inproceedings{ijcai2022p102,
+        title     = {AttExplainer: Explain Transformer via Attention by Reinforcement Learning},
+        author    = {Niu, Runliang and Wei, Zhepei and Wang, Yan and Wang, Qi},
+        booktitle = {Proceedings of the Thirty-First International Joint Conference on
+                    Artificial Intelligence, {IJCAI-22}},
+        publisher = {International Joint Conferences on Artificial Intelligence Organization},
+        editor    = {Lud De Raedt},
+        pages     = {724--731},
+        year      = {2022},
+        month     = {7},
+        note      = {Main Track},
+        doi       = {10.24963/ijcai.2022/102},
+        url       = {https://doi.org/10.24963/ijcai.2022/102},
+    }
