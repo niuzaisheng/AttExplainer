@@ -115,7 +115,7 @@ class DQN(object):
         DQN progress for training
     """
 
-    def __init__(self, config, do_eval=False, mask_token_id=103, input_feature_shape=2):
+    def __init__(self, config, do_eval=False, mask_token_id=103, input_feature_shape=2, replace_func=None):
 
         self.do_eval = do_eval
 
@@ -146,6 +146,7 @@ class DQN(object):
         self.target_net = send_to_device(self.target_net, self.device)
 
         self.use_categorical_policy = config.use_categorical_policy
+        self.use_ddqn = config.use_ddqn
         if not do_eval:
             self.learn_step_counter = 0
             self.max_memory_capacity = config.max_memory_capacity
@@ -274,22 +275,21 @@ class DQN(object):
         now_features = send_to_device(now_features, self.device)
         game_status = send_to_device(game_status, self.device)
         q_eval = self.eval_net(now_features, game_status)
-        # max_seq_len = q_eval.size(1)
-        # actions = F.one_hot(actions, num_classes=max_seq_len).bool()
-        # q_eval = q_eval.masked_select(actions)  # [B, seq, 1]  -> [B, 1]
         q_eval = q_eval.gather(1, actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
         with torch.no_grad():
             next_special_tokens_mask = send_to_device(next_special_tokens_mask, self.device)
             next_features = send_to_device(next_features, self.device)
             next_game_status = send_to_device(next_game_status, self.device)
-            q_target = self.target_net(next_features, next_game_status)
-            # target_actions = actions.masked_fill(next_special_tokens_mask, -np.inf)
-            # target_actions = torch.argmax(target_actions, dim=1)  # [B, seq_len] -> [B]
-            target_actions = self.select_action_by_policy(q_target, batch_seq_length, next_special_tokens_mask, epsilon_greedy=False)
-            # target_actions = F.one_hot(target_actions, num_classes=max_seq_len).bool()
-            # q_target = q_target.masked_select(target_actions)  # [B, seq, 1]  -> [B, 1]
-            q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
+            if self.use_ddqn:
+                target_actions = self.eval_net(next_features, next_game_status)
+                target_actions = self.select_action_by_policy(target_actions, batch_seq_length, next_special_tokens_mask, epsilon_greedy=False)
+                q_target = self.target_net(next_features, next_game_status)
+                q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)
+            else:
+                q_target = self.target_net(next_features, next_game_status)
+                target_actions = self.select_action_by_policy(q_target, batch_seq_length, next_special_tokens_mask, epsilon_greedy=False)
+                q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
         # q_target = q_target.masked_select(actions)
         q_target = rewards + self.gamma * (1 - ifdone) * q_target.detach()

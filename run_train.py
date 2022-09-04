@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--dqn_batch_size", type=int, default=256)
     parser.add_argument("--epsilon", type=float, default=0.7)
     parser.add_argument("--gamma", type=float, default=0.9)
+    parser.add_argument("--use_ddqn", action="store_true", default=False)
     parser.add_argument("--use_categorical_policy", action="store_true", default=False)
 
     # Game Settings
@@ -156,6 +157,7 @@ def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_st
     musked_token_num = original_seq_length - unmusk_token_num
     musked_token_rate = 1 - unmusked_token_rate
     delta_p = (original_prob - post_prob)
+    unmusked_token_rate = send_to_device(unmusked_token_rate, delta_p.device)
 
     if config.task_type == "attack":
         if_success = torch.logical_not(post_acc.bool()).float()
