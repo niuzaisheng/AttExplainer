@@ -26,29 +26,29 @@ def get_attention(model_outputs, layer_sets=None):
 
 
 def gather_correct_examples(original_acc: Tensor,
-                            simulate_batch_size: int, seq_length: List,
+                            batch_size: int, seq_length: List,
                             special_tokens_mask: Tensor,
-                            simulate_batch: Dict[str, Tensor],
+                            batch: Dict[str, Tensor],
                             original_loss: Tensor,
                             original_pred_labels: Tensor,
                             original_prob: Tensor = None,
                             ):
 
-    left_index = [i for i in range(simulate_batch_size) if original_acc[i].item() == 1]
+    left_index = [i for i in range(batch_size) if original_acc[i].item() == 1]
     left_seq_length = [value for i, value in enumerate(seq_length) if i in left_index]
 
     left_original_acc = original_acc[left_index]
     left_special_tokens_mask = special_tokens_mask[left_index]
 
-    left_simulate_batch = {}
-    for key in simulate_batch.keys():
-        left_simulate_batch[key] = simulate_batch[key][left_index]
+    left_batch = {}
+    for key in batch.keys():
+        left_batch[key] = batch[key][left_index]
 
     left_original_loss = original_loss[left_index]
     left_original_pred_labels = original_pred_labels[left_index]
     left_original_prob = original_prob[left_index]
 
-    return len(left_index), left_seq_length, left_special_tokens_mask, left_simulate_batch, \
+    return len(left_index), left_seq_length, left_special_tokens_mask, left_batch, \
         left_original_loss, left_original_acc, left_original_pred_labels, left_original_prob
 
 
@@ -241,14 +241,14 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
-def compute_fidelity_when_masked(original_model, finished_index, simulate_batch, special_tokens_mask,
+def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
                      game_status, original_pred_labels, lm_device, mask_token_id=103):
 
     fidelity_plus_batch = {}
     fidelity_minus_batch = {}
-    for key in simulate_batch.keys():
-        fidelity_plus_batch[key] = simulate_batch[key][finished_index]
-        fidelity_minus_batch[key] = simulate_batch[key][finished_index]
+    for key in batch.keys():
+        fidelity_plus_batch[key] = batch[key][finished_index]
+        fidelity_minus_batch[key] = batch[key][finished_index]
 
     finish_game_status = game_status[finished_index]
     finish_special_tokens_mask = special_tokens_mask[finished_index]
@@ -274,12 +274,12 @@ def compute_fidelity_when_masked(original_model, finished_index, simulate_batch,
 
     return fidelity_plus_acc, fidelity_minus_acc
 
-def compute_fidelity_when_deleted(original_model, finished_index, simulate_batch, special_tokens_mask,
+def compute_fidelity_when_deleted(original_model, finished_index, batch, special_tokens_mask,
                      game_status, original_pred_labels, lm_device):
 
     fidelity_plus_batch = {}
-    for key in simulate_batch.keys():
-        fidelity_plus_batch[key] = simulate_batch[key][finished_index]
+    for key in batch.keys():
+        fidelity_plus_batch[key] = batch[key][finished_index]
 
     finish_game_status = game_status[finished_index]
     finish_special_tokens_mask = special_tokens_mask[finished_index]
@@ -303,13 +303,14 @@ def compute_fidelity_when_deleted(original_model, finished_index, simulate_batch
 
 
 
-def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_length: List,
+def gather_unfinished_examples(ifdone: Tensor, batch_size: int, seq_length: List,
                                original_seq_length: Tensor,
                                golden_labels: Tensor,
                                next_special_tokens_mask: Tensor,
                                next_attentions: Tensor,
                                now_game_status: Tensor,
-                               simulate_batch: Dict[str, Tensor],
+                               original_batch: Dict[str, Tensor],
+                               batch: Dict[str, Tensor],
                                original_pred_labels: Tensor,
                                token_word_position_map: Dict[int, int],
                                cumulative_rewards: Tensor = None,
@@ -321,10 +322,9 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
                                unmusked_token_rate: Tensor = None,
                                ):
 
-    left_index = [i for i in range(simulate_batch_size) if ifdone[i].item() == 0]
+    left_index = [i for i in range(batch_size) if ifdone[i].item() == 0]
     left_seq_length = [value for i, value in enumerate(seq_length) if i in left_index]
     left_original_seq_length = [value for i, value in enumerate(original_seq_length) if i in left_index]
-    # left_original_seq_length = original_seq_length[left_index]
     left_golden_labels = golden_labels[left_index]
     left_next_attentions = next_attentions[left_index]
     left_next_game_status = now_game_status[left_index]
@@ -336,9 +336,13 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
     left_token_word_position_map = [v for i, v in enumerate(token_word_position_map) if i in left_index]
     left_cumulative_rewards = cumulative_rewards[left_index]
 
-    next_simulate_batch = {}
-    for key in simulate_batch.keys():
-        next_simulate_batch[key] = simulate_batch[key][left_index]
+    next_batch = {}
+    for key in batch.keys():
+        next_batch[key] = batch[key][left_index]
+
+    next_original_batch = {}
+    for key in original_batch.keys():
+        next_original_batch[key] = original_batch[key][left_index]
 
     if delta_p is not None:
         left_delta_p = delta_p[left_index]
@@ -346,12 +350,22 @@ def gather_unfinished_examples(ifdone: Tensor, simulate_batch_size: int, seq_len
         left_unmusked_token_rate = unmusked_token_rate[left_index]
 
         return len(left_index), left_seq_length, left_original_seq_length, left_golden_labels,left_next_special_tokens_mask, \
-            left_next_attentions, left_next_game_status, next_simulate_batch, \
+            left_next_attentions, left_next_game_status, next_original_batch, next_batch, \
             left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
             left_original_acc, left_original_loss, left_original_prob, \
             left_delta_p, left_musked_token_rate, left_unmusked_token_rate
     else:
         return len(left_index), left_seq_length, left_original_seq_length, left_golden_labels, left_next_special_tokens_mask, \
-            left_next_attentions, left_next_game_status, next_simulate_batch, \
+            left_next_attentions, left_next_game_status, next_original_batch, next_batch, \
             left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
             left_original_acc, left_original_loss, left_original_prob
+
+
+def clone_batch(batch: Dict[str, Tensor]):
+    """
+    Clone a batch of inputs and targets.
+    """
+    cloned_batch = {}
+    for key in batch.keys():
+        cloned_batch[key] = batch[key].clone()
+    return cloned_batch

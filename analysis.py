@@ -117,18 +117,19 @@ def get_rewards(original_seq_length, original_acc, original_prob, original_loss,
     delta_p = (original_prob - post_prob)
 
     if config.task_type == "attack":
-        ifdone = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
-        post_rewards = 10 * ifdone
+        if_success = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
+        post_rewards = 10 * if_success
 
     elif config.task_type == "explain":
-        ifdone = (delta_p >= config.done_threshold).float()
+        if_success = (delta_p >= config.done_threshold).float()
         post_rewards = 10 * delta_p
 
+    ifdone = if_success.clone() # die or win == 1
     for i in range(unmusk_token_num.size(0)):
         if unmusk_token_num[i] == 1:
             ifdone[i] = 1
 
-    return post_rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
+    return post_rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
 
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
@@ -160,7 +161,6 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
 
 dqn = DQN(config, do_eval=True , mask_token_id=MASK_TOKEN_ID, input_feature_shape=input_feature_shape)
-
 exp_name = "eval"
 completed_steps = 0
 
@@ -170,7 +170,7 @@ attack_example_num = 0  # Attack Success Rate
 all_musked_token_rate = []  # Word Modification Rate
 # all_musked_word_rate = []
 all_unmusked_token_rate = []
-all_done_game_step = []  # Average Victim Model Query Times
+all_success_game_step = []  # Average Victim Model Query Times
 all_fidelity = []
 all_delta_prob = []
 all_cumulative_rewards = []
@@ -205,6 +205,8 @@ for step, batch in enumerate(eval_dataloader):
     special_tokens_mask = batch.pop("special_tokens_mask")
     special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
     token_word_position_map = batch.pop("token_word_position_map")
+
+    original_batch = clone_batch(batch)
     batch = send_to_device(batch, lm_device)
     empty_batch = get_empty_batch(batch, special_tokens_mask, mask_token_id=MASK_TOKEN_ID)
 
@@ -239,7 +241,7 @@ for step, batch in enumerate(eval_dataloader):
         post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
         next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                      lm_device=lm_device, dqn_device=dqn.device, features_type = config.features_type)
-        rewards, ifdone, delta_p, musked_token_rate, unmusked_token_rate, \
+        rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, \
             musked_token_num, unmusk_token_num = get_rewards(original_seq_length, original_acc, original_prob, original_loss,
                                                              post_acc, post_prob, post_loss, next_game_status, game_step)
 
@@ -253,10 +255,11 @@ for step, batch in enumerate(eval_dataloader):
 
         removed_index = [i for i in range(batch_size) if ifdone[i].item() == 1]
         if len(removed_index) != 0:
+            success_index = [i for i in range(batch_size) if if_success[i].item() == 1]
             all_musked_token_rate.extend(musked_token_rate[removed_index].tolist())
             all_unmusked_token_rate.extend(unmusked_token_rate[removed_index].tolist())
-            all_done_game_step.extend([game_step + 1 ] * len(removed_index))
-            attack_successful_num += len(removed_index)
+            all_success_game_step.extend([game_step + 1 ] * len(removed_index))
+            attack_successful_num += len(success_index)
             all_cumulative_rewards.extend(cumulative_rewards[removed_index].tolist())
             all_done_step_musk_rate_score[game_step + 1].extend(musked_token_rate[removed_index].tolist())
             all_done_step_musk_token_num[game_step + 1].extend(musked_token_num[removed_index].tolist())
@@ -271,10 +274,10 @@ for step, batch in enumerate(eval_dataloader):
             # fidelity
             finished_index = removed_index
             if config.token_replacement_strategy == "mask":
-                fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, finished_index, batch,
+                fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, finished_index, post_batch,
                                                 special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
             elif config.token_replacement_strategy == "delete":
-                fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, batch,
+                fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
                                                 special_tokens_mask, now_game_status, original_pred_labels, lm_device)
 
             all_fidelity.extend(fidelity_acc.tolist())
@@ -283,18 +286,18 @@ for step, batch in enumerate(eval_dataloader):
             all_delta_prob.extend(delta_p[removed_index].tolist())
 
             if config.use_wandb:
-                save_result(len(removed_index), completed_steps, batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                save_result(len(removed_index), completed_steps, original_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                             golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                             delta_p[removed_index], tokenizer, label_names, wandb_result_table)
 
         # Remove those completed samples and parpare for next game step
         batch_size, seq_length, original_seq_length, golden_labels, special_tokens_mask, now_features, \
-                now_game_status, batch, original_pred_labels, \
+                now_game_status, original_batch, batch, original_pred_labels, \
                 token_word_position_map, cumulative_rewards, \
                 original_acc, original_loss, original_prob = \
                 gather_unfinished_examples(ifdone, batch_size, seq_length, original_seq_length, golden_labels, next_special_tokens_mask,
                                            next_features, next_game_status,
-                                           post_batch, original_pred_labels,
+                                           original_batch, post_batch, original_pred_labels,
                                            token_word_position_map, cumulative_rewards,
                                            original_acc, original_loss, original_prob)
     
@@ -320,12 +323,12 @@ for step, batch in enumerate(eval_dataloader):
         # word_masked_rate = get_word_masked_rate(now_game_status, original_seq_length, token_word_position_map)
         # all_musked_word_rate.extend(word_masked_rate)
 
-        fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, unfinished_index, batch,
+        fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, unfinished_index, post_batch,
                                            special_tokens_mask, next_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
         all_fidelity.extend(fidelity_acc.tolist())
 
         if config.use_wandb:
-            save_result(len(unfinished_index), completed_steps, batch["input_ids"], post_batch["input_ids"],
+            save_result(len(unfinished_index), completed_steps, original_batch["input_ids"], post_batch["input_ids"],
                         golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, label_names, wandb_result_table)
 
     all_game_step_done_num[game_step + 1].append(1 - batch_size / batch_size_at_start)
@@ -347,7 +350,7 @@ reslut["Attack Success Rate"] = attack_successful_num / attack_example_num
 reslut["Token Modification Rate"] = np.mean(all_musked_token_rate)
 # reslut["Word Modification Rate"] = np.mean(all_musked_word_rate)
 reslut["Word Left Rate"] = np.mean(all_unmusked_token_rate)
-reslut["Average Victim Model Query Times"] = np.mean(all_done_game_step)
+reslut["Average Victim Model Query Times"] = np.mean(all_success_game_step)
 reslut["Fidelity"] = np.mean(all_fidelity)
 reslut["delta_prob"] = np.mean(all_delta_prob)
 

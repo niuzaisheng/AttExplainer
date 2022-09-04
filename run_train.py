@@ -158,20 +158,24 @@ def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_st
     delta_p = (original_prob - post_prob)
 
     if config.task_type == "attack":
-        ifdone = torch.logical_not(post_acc.bool()).float()
-        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * ifdone * unmusked_token_rate - game_step / config.max_game_steps
-        post_rewards = 10 * ifdone
+        if_success = torch.logical_not(post_acc.bool()).float()
+        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * if_success * unmusked_token_rate - game_step / config.max_game_steps
+        # post_rewards = 10 * if_success
+        post_rewards = delta_p + 10 * if_success * unmusked_token_rate
+        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmusked_token_rate
 
     elif config.task_type == "explain":
-        ifdone = (delta_p >= config.done_threshold).float()
-        # post_rewards = torch.clip(delta_p, 0) + 10 * ifdone * unmusked_token_rate - 0.2
+        if_success = (delta_p >= config.done_threshold).float()
+        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmusked_token_rate - 0.2
         post_rewards = 10 * delta_p
 
+    ifdone = if_success.clone() # die or win == 1
     for i in range(unmusk_token_num.size(0)):
         if unmusk_token_num[i] == 1:
             ifdone[i] = 1
 
-    return delta_p, post_rewards, ifdone, musked_token_rate, unmusked_token_rate
+    # return delta_p, post_rewards, ifdone, if_success, musked_token_rate, unmusked_token_rate
+    return post_rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
 
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
@@ -202,7 +206,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
     return now_features, post_acc, post_loss, post_prob, post_pred_labels
 
 
-dqn = DQN(config, MASK_TOKEN_ID, input_feature_shape)
+dqn = DQN(config, do_eval=False, mask_token_id=MASK_TOKEN_ID, input_feature_shape=input_feature_shape)
 progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader), disable=config.disable_tqdm)
 exp_name = "simulate"
 
@@ -226,6 +230,7 @@ for epoch in range(config.max_train_epoch):
         special_tokens_mask = batch.pop("special_tokens_mask").bool()
         special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
         token_word_position_map = batch.pop("token_word_position_map")
+        original_batch = clone_batch(batch)
         batch = send_to_device(batch, lm_device)
 
         with torch.no_grad():
@@ -261,8 +266,8 @@ for epoch in range(config.max_train_epoch):
             post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
             next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                        lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
-            delta_p, rewards, ifdone, musked_token_rate, unmusked_token_rate = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
-
+            rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, _, _ = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
+            
             dqn.store_transition(batch_size, special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
 
             cumulative_rewards += rewards
@@ -287,7 +292,7 @@ for epoch in range(config.max_train_epoch):
                 if completed_steps % 10 == 0:
                     if config.use_wandb:
                         save_result(len(removed_index), completed_steps,
-                                    batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                                    original_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                                     golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                                     delta_p[removed_index], tokenizer, wandb_result_table)
 
@@ -305,12 +310,12 @@ for epoch in range(config.max_train_epoch):
 
             # Remove those completed samples and parpare for next game step
             batch_size, seq_length, original_seq_length, golden_labels, special_tokens_mask, now_features, \
-                now_game_status, batch, original_pred_labels, \
+                now_game_status, original_batch, batch, original_pred_labels, \
                 token_word_position_map, cumulative_rewards, \
                 original_acc, original_loss, original_prob = \
                 gather_unfinished_examples(ifdone, batch_size, seq_length, original_seq_length, golden_labels, next_special_tokens_mask,
                                            next_features, next_game_status,
-                                           post_batch, original_pred_labels,
+                                           original_batch, post_batch, original_pred_labels,
                                            token_word_position_map, cumulative_rewards,
                                            original_acc, original_loss, original_prob)
 
@@ -343,7 +348,7 @@ for epoch in range(config.max_train_epoch):
             # Can't reach finish status examples.
             if config.use_wandb:
                 save_result(batch_size, completed_steps,
-                            batch["input_ids"], post_batch["input_ids"],
+                            original_batch["input_ids"], post_batch["input_ids"],
                             golden_labels, original_pred_labels, post_pred_labels,
                             delta_p, tokenizer, wandb_result_table)
 

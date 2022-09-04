@@ -156,7 +156,7 @@ class DQN(object):
             self.memory = Memory(self.max_memory_capacity)
             self.loss_func = nn.MSELoss(reduce=False)
 
-    def select_action_by_policy(self, actions, special_tokens_mask):
+    def select_action_by_policy(self, actions, batch_seq_length, special_tokens_mask, epsilon_greedy=False):
         actions = actions.masked_fill(special_tokens_mask, -np.inf)
         if self.use_categorical_policy:
             # categorical policy
@@ -166,6 +166,10 @@ class DQN(object):
         else:
             # argmax policy
             select_action = torch.argmax(actions, dim=1)  # [B, seq_len] -> [B]
+            for i, index in enumerate(batch_seq_length):
+                if epsilon_greedy and np.random.uniform() > self.epsilon:
+                    select_action[i] = random.randint(0, index-1)
+
         return select_action
 
     def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status):
@@ -178,13 +182,7 @@ class DQN(object):
         with torch.no_grad():
             actions = self.eval_net(now_features, game_status).detach()
 
-        select_action = self.select_action_by_policy(actions, special_tokens_mask)
-
-        for i, index in enumerate(batch_seq_length):
-            if self.do_eval is not True and np.random.uniform() > self.epsilon:
-                select_action[i] = 0
-                select_action[i][random.randint(0, index-1)] = 1
-
+        select_action = self.select_action_by_policy(actions, batch_seq_length, special_tokens_mask, not self.do_eval)
 
         if self.token_replacement_strategy == "mask":
             next_game_status = game_status.clone()
@@ -288,7 +286,7 @@ class DQN(object):
             q_target = self.target_net(next_features, next_game_status)
             # target_actions = actions.masked_fill(next_special_tokens_mask, -np.inf)
             # target_actions = torch.argmax(target_actions, dim=1)  # [B, seq_len] -> [B]
-            target_actions = self.select_action_by_policy(q_target, next_special_tokens_mask)
+            target_actions = self.select_action_by_policy(q_target, batch_seq_length, next_special_tokens_mask, epsilon_greedy=False)
             # target_actions = F.one_hot(target_actions, num_classes=max_seq_len).bool()
             # q_target = q_target.masked_select(target_actions)  # [B, seq, 1]  -> [B, 1]
             q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
