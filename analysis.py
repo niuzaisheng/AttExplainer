@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
+    parser.add_argument("--use_ddqn", action="store_true", default=False)
     parser.add_argument("--use_categorical_policy", action="store_true", default=False)
 
     parser.add_argument("--dqn_weights_path", type=str)

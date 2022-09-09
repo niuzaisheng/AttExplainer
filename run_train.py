@@ -169,7 +169,7 @@ def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_st
     elif config.task_type == "explain":
         if_success = (delta_p >= config.done_threshold).float()
         # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmusked_token_rate - 0.2
-        post_rewards = 10 * delta_p
+        post_rewards = delta_p
 
     ifdone = if_success.clone() # die or win == 1
     for i in range(unmusk_token_num.size(0)):
