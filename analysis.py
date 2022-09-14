@@ -82,16 +82,7 @@ else:
 
 # Different feature extraction methods will get feature matrices of different dimensions
 # For DQN gather single step data into batch from replay buffer 
-if config.features_type == "statistical_bin":
-    input_feature_shape = 2 # 2D feature map
-elif config.features_type == "const":
-    input_feature_shape = 2 # 2D feature map
-elif config.features_type == "random":
-    input_feature_shape = 2 # 2D feature map
-elif config.features_type == "effective_information":
-    input_feature_shape = 1 # 1D feature map
-elif config.features_type == "gradient":
-    input_feature_shape = 2  # 2D feature map
+input_feature_shape = input_feature_shape_dict[config.features_type]
 
 if config.use_wandb:
     import wandb
@@ -150,7 +141,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
     else:
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], original_pred_labels, embedding_weight_tensor)
+        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], embedding_weight_tensor)
         embedding_weight_tensor.grad.zero_()
 
     post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)

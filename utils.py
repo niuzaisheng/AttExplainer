@@ -10,6 +10,16 @@ from torch import Tensor
 from ei_net import modify_effective_information
 
 
+# Different feature extraction methods will get feature matrices of different dimensions
+# For DQN gather single step data into batch from replay buffer 
+input_feature_shape_dict = {
+    "statistical_bin": 2,
+    "const": 2,
+    "random": 2,
+    "effective_information": 1,
+    "gradient": 2,
+}
+
 def get_attention(model_outputs, layer_sets=None):
     """
         Get attention metrix from the model. Output size is [Batch, 1, seq_len, seq_len]
@@ -169,7 +179,7 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
     stack = torch.cat([stack, statistics], dim=-1)  # [ batch_size, max_seq_len, bins_num * 2 + 4]
     return stack
 
-def get_gradient_features(model_outputs, batch_seq_len, input_ids, pred_label, embedding_weight_tensor):
+def get_gradient_features(model_outputs, batch_seq_len, input_ids, embedding_weight_tensor):
     batch_size = len(batch_seq_len)
     seq_len = input_ids.size(-1)
     model_rep_dim = embedding_weight_tensor.size(-1)

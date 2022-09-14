@@ -118,36 +118,40 @@ class DQN(object):
     def __init__(self, config, do_eval=False, mask_token_id=103, input_feature_shape=2, replace_func=None):
 
         self.do_eval = do_eval
-
-        if config.is_agent_on_GPU:
-            self.device = torch.device("cuda", config.gpu_index)
-        else:
-            self.device = torch.device("cpu")
+        self.device = torch.device("cuda", config.gpu_index) if config.is_agent_on_GPU else torch.device("cpu")
         self.mask_token_id = mask_token_id
         self.input_feature_shape = input_feature_shape
         self.token_replacement_strategy = config.token_replacement_strategy
 
         if config.features_type == "gradient":
             self.eval_net = DQNNet4Grad(config)
-            self.target_net = DQNNet4Grad(config)
+            if not do_eval:
+                self.target_net = DQNNet4Grad(config)
         else:
             if input_feature_shape == 2:
                 self.eval_net = DQNNet(config)
-                self.target_net = DQNNet(config)
+                if not do_eval:
+                    self.target_net = DQNNet(config)
             elif input_feature_shape == 1:
                 self.eval_net = DQNNet1D(config)
-                self.target_net = DQNNet1D(config)
+                if not do_eval:
+                    self.target_net = DQNNet1D(config)
 
-        self.target_net.load_state_dict(self.eval_net.state_dict())
+        if do_eval:
+            with open(config.dqn_weights_path, "rb") as f:
+                self.eval_net.load_state_dict(torch.load(f, map_location=self.device))
+
         if not do_eval:
+            self.target_net.load_state_dict(self.eval_net.state_dict())
             self.optimizer = optim.Adam(self.eval_net.parameters(), lr=config.dqn_rl)
 
         self.eval_net = send_to_device(self.eval_net, self.device)
-        self.target_net = send_to_device(self.target_net, self.device)
+        if not do_eval:
+            self.target_net = send_to_device(self.target_net, self.device)
 
         self.use_categorical_policy = config.use_categorical_policy
-        self.use_ddqn = config.use_ddqn
         if not do_eval:
+            self.use_ddqn = config.use_ddqn
             self.learn_step_counter = 0
             self.max_memory_capacity = config.max_memory_capacity
             self.target_replace_iter = config.target_replace_iter
@@ -271,6 +275,8 @@ class DQN(object):
             self.memory.add(q_loss[i], new_item)
 
     def get_td_loss(self, batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone):
+        if self.do_eval:
+            raise Exception("Could not get_td_loss when do_eval!")
         ifdone = ifdone.float()
         now_features = send_to_device(now_features, self.device)
         game_status = send_to_device(game_status, self.device)

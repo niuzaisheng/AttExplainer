@@ -52,7 +52,7 @@ def parse_args():
 
     # Train settings
     parser.add_argument("--gpu_index", type=int, default=0)
-    parser.add_argument("--is_agent_on_GPU", type=bool, default=False)
+    parser.add_argument("--is_agent_on_GPU", type=bool, default=True)
     parser.add_argument("--max_train_epoch", type=int, default=1000)
     parser.add_argument("--save_step_iter", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=32)
@@ -164,6 +164,7 @@ def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_st
         # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * if_success * unmusked_token_rate - game_step / config.max_game_steps
         # post_rewards = 10 * if_success
         post_rewards = delta_p + 10 * if_success * unmusked_token_rate
+        # post_rewards = 10 * if_success * unmusked_token_rate
         # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmusked_token_rate
 
     elif config.task_type == "explain":
@@ -197,7 +198,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
     else:
         post_outputs = transformer_model(**post_batch, output_attentions=True)
-        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], original_pred_labels, embedding_weight_tensor)
+        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], embedding_weight_tensor)
         embedding_weight_tensor.grad.zero_()
 
     post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
