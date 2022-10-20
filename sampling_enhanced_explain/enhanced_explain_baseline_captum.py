@@ -100,10 +100,6 @@ class StepCounter:
     def get_step(self):
         return self.step
 
-
-game_step_KernelShap = StepCounter()
-game_step_EnhancedKernelShap = StepCounter()
-
 # Metrics
 metrics_dict = {
     "KernelShap": defaultdict(list),
@@ -130,8 +126,10 @@ if config.explain_method == "FeatureAblation":
 elif config.explain_method == "Occlusion":
     lig = Occlusion(predict)
 elif config.explain_method == "KernelShap":
+    game_step_EnhancedKernelShap = StepCounter()
     lig = EnhancedKernelShap(partial(predict, game_step_counter=game_step_EnhancedKernelShap),
                              transformer_model, dqn_model)
+    game_step_KernelShap = StepCounter()
     original_lig = KernelShap(partial(predict, game_step_counter=game_step_KernelShap))
 elif config.explain_method == "ShapleyValueSampling":
     lig = ShapleyValueSampling(predict)
@@ -259,7 +257,8 @@ for method in metrics_dict.keys():
             reslut[method][metric] = np.mean(metrics_dict[method][metric])
     reslut[method]["Attack Success Rate"] = reslut[method]["successful_num"] / reslut[method]["eval_num"]
 
-reslut["corrcoef"] = np.corrcoef(metrics_dict["EnhancedKernelShap"]["summarize_res"], metrics_dict["KernelShap"]["summarize_res"])
+if config.explain_method == "KernelShap":
+    reslut["corrcoef"] = np.corrcoef(metrics_dict["EnhancedKernelShap"]["summarize_res"], metrics_dict["KernelShap"]["summarize_res"])
 
 logger.info(f"Result")
 for k, v in reslut.items():
