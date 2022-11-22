@@ -10,7 +10,12 @@ log*.txt
 result_tabels/*
 Note.md
 data/du/*
+data/eraserbenchmark/*
+data/eraser_esnli/*
 test.sh
+test.py
+*.tar.gz
+artifacts/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

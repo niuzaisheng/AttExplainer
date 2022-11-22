@@ -1,10 +1,13 @@
 tqdm
 numpy
-torch
-transformers==4.8.1
+datasets
+OpenAttack
+transformers
 adapter-transformers
+torch
 accelerate
 wandb
-OpenAttack
 captum
 lime
+ipykernel
+ipywidgets

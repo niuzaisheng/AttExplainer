@@ -1,5 +1,4 @@
 
-# Adversarial Attack results analysis process
 import argparse
 import copy
 import logging
@@ -73,12 +72,7 @@ problem_type = dataset_config["problem_type"]
 num_labels = dataset_config["num_labels"]
 label_names = dataset_config["label_names"]
 text_col_name = dataset_config["text_col_name"]
-
-# the number of [CLS],[SEP] special token in an example
-if isinstance(text_col_name, list):
-    token_quantity_correction = 3
-else:
-    token_quantity_correction = 2
+token_quantity_correction = dataset_config["token_quantity_correction"] # the number of [CLS],[SEP] special token in an example
 
 # Different feature extraction methods will get feature matrices of different dimensions
 # For DQN gather single step data into batch from replay buffer 
@@ -102,10 +96,10 @@ logger.info("Finish loading!")
 def get_rewards(original_seq_length, original_acc, original_prob, original_loss, post_acc, post_prob, post_loss, game_status, game_step):
 
     original_seq_length = (torch.FloatTensor(original_seq_length) - token_quantity_correction).to(game_status.device)
-    unmusk_token_num = game_status.sum(dim=1) - token_quantity_correction
-    unmusked_token_rate = unmusk_token_num / original_seq_length
-    musked_token_num = original_seq_length - unmusk_token_num
-    musked_token_rate = 1 - unmusked_token_rate
+    unmask_token_num = game_status.sum(dim=1) - token_quantity_correction
+    unmasked_token_rate = unmask_token_num / original_seq_length
+    masked_token_num = original_seq_length - unmask_token_num
+    masked_token_rate = 1 - unmasked_token_rate
     delta_p = (original_prob - post_prob)
 
     if config.task_type == "attack":
@@ -117,11 +111,11 @@ def get_rewards(original_seq_length, original_acc, original_prob, original_loss,
         post_rewards = 10 * delta_p
 
     ifdone = if_success.clone() # die or win == 1
-    for i in range(unmusk_token_num.size(0)):
-        if unmusk_token_num[i] == 1:
+    for i in range(unmask_token_num.size(0)):
+        if unmask_token_num[i] == 1:
             ifdone[i] = 1
 
-    return post_rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
+    return post_rewards, ifdone, if_success, delta_p, masked_token_rate, unmasked_token_rate, masked_token_num, unmask_token_num
 
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
@@ -140,9 +134,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
                 extracted_features = get_EI_attention_features(post_outputs, seq_length)
 
     else:
-        post_outputs = transformer_model(**post_batch, output_attentions=True)
-        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], embedding_weight_tensor)
-        embedding_weight_tensor.grad.zero_()
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels)
 
     post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
     post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
@@ -154,14 +146,13 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
 dqn = DQN(config, do_eval=True , mask_token_id=MASK_TOKEN_ID, input_feature_shape=input_feature_shape)
 exp_name = "eval"
-completed_steps = 0
 
 # Metrics
 attack_successful_num = 0  # Attack Success Rate
 attack_example_num = 0  # Attack Success Rate
-all_musked_token_rate = []  # Word Modification Rate
-# all_musked_word_rate = []
-all_unmusked_token_rate = []
+all_masked_token_rate = []  # Word Modification Rate
+# all_masked_word_rate = []
+all_unmasked_token_rate = []
 all_success_game_step = []  # Average Victim Model Query Times
 all_fidelity = []
 all_delta_prob = []
@@ -170,9 +161,13 @@ all_cumulative_rewards = []
 all_game_step_done_num = defaultdict(list)  # success rate in each game_step
 all_game_step_mask_rate = defaultdict(list)  # token mask rate in each game_step
 all_game_step_mask_token_num = defaultdict(list)  # mask token num in each game_step
-all_done_step_musk_rate_score = defaultdict(list)  # token mask rate in each done example
-all_done_step_musk_token_num = defaultdict(list)  # mask token num in each done example
-all_done_step_unmusk_token_num = defaultdict(list)  # unmask token num in each done example
+all_game_step_delta_prob = defaultdict(list)  # delta_prob in each game_step
+
+all_done_step_mask_rate_score = defaultdict(list)  # token mask rate in each done example
+all_done_step_mask_token_num = defaultdict(list)  # mask token num in each done example
+all_done_step_unmask_token_num = defaultdict(list)  # unmask token num in each done example
+all_done_step_delta_prob = defaultdict(list)  # delta_prob in each done example
+
 all_eval_token_length = []
 all_eval_example_num = 0
 
@@ -228,13 +223,12 @@ for step, batch in enumerate(eval_dataloader):
     for game_step in range(epoch_game_steps):
         game_step_progress_bar.update()
         game_step_progress_bar.set_postfix({"left_examples": batch_size})
-        all_game_step_done_num[game_step].append(1 - batch_size / batch_size_at_start)
 
         post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
         next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                      lm_device=lm_device, dqn_device=dqn.device, features_type = config.features_type)
-        rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, \
-            musked_token_num, unmusk_token_num = get_rewards(original_seq_length, original_acc, original_prob, original_loss,
+        rewards, ifdone, if_success, delta_p, masked_token_rate, unmasked_token_rate, \
+            masked_token_num, unmask_token_num = get_rewards(original_seq_length, original_acc, original_prob, original_loss,
                                                              post_acc, post_prob, post_loss, next_game_status, game_step)
 
         if cumulative_rewards is None:
@@ -242,26 +236,28 @@ for step, batch in enumerate(eval_dataloader):
         else:
             cumulative_rewards += rewards
 
-        all_game_step_mask_rate[game_step + 1].extend(musked_token_rate.tolist())
-        all_game_step_mask_token_num[game_step + 1].extend(musked_token_num.tolist())
+        all_game_step_mask_rate[game_step + 1].extend(masked_token_rate.tolist())
+        all_game_step_mask_token_num[game_step + 1].extend(masked_token_num.tolist())
+        all_game_step_delta_prob[game_step + 1].extend(delta_p.tolist())
 
         removed_index = [i for i in range(batch_size) if ifdone[i].item() == 1]
         if len(removed_index) != 0:
             success_index = [i for i in range(batch_size) if if_success[i].item() == 1]
-            all_musked_token_rate.extend(musked_token_rate[removed_index].tolist())
-            all_unmusked_token_rate.extend(unmusked_token_rate[removed_index].tolist())
+            all_masked_token_rate.extend(masked_token_rate[removed_index].tolist())
+            all_unmasked_token_rate.extend(unmasked_token_rate[removed_index].tolist())
             all_success_game_step.extend([game_step + 1 ] * len(removed_index))
             attack_successful_num += len(success_index)
             all_cumulative_rewards.extend(cumulative_rewards[removed_index].tolist())
-            all_done_step_musk_rate_score[game_step + 1].extend(musked_token_rate[removed_index].tolist())
-            all_done_step_musk_token_num[game_step + 1].extend(musked_token_num[removed_index].tolist())
-            all_done_step_unmusk_token_num[game_step + 1].extend(unmusk_token_num[removed_index].tolist())
+            all_done_step_mask_rate_score[game_step + 1].extend(masked_token_rate[removed_index].tolist())
+            all_done_step_mask_token_num[game_step + 1].extend(masked_token_num[removed_index].tolist())
+            all_done_step_unmask_token_num[game_step + 1].extend(unmask_token_num[removed_index].tolist())
+            all_done_step_delta_prob[game_step + 1].extend(delta_p[removed_index].tolist())
 
             done_seq_length = [v for i, v in enumerate(original_seq_length) if i in removed_index]
             # done_seq_length = original_seq_length[removed_index]
             done_token_word_position_map = [v for i, v in enumerate(token_word_position_map) if i in removed_index]
             # word_masked_rate = get_word_masked_rate(now_game_status[removed_index], done_seq_length, done_token_word_position_map)
-            # all_musked_word_rate.extend(word_masked_rate)
+            # all_masked_word_rate.extend(word_masked_rate)
 
             # fidelity
             finished_index = removed_index
@@ -278,16 +274,16 @@ for step, batch in enumerate(eval_dataloader):
             all_delta_prob.extend(delta_p[removed_index].tolist())
 
             if config.use_wandb:
-                save_result(len(removed_index), completed_steps, original_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
+                save_result(len(removed_index), game_step + 1, original_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
                             golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
                             delta_p[removed_index], tokenizer, label_names, wandb_result_table)
 
         # Remove those completed samples and parpare for next game step
-        batch_size, seq_length, original_seq_length, golden_labels, special_tokens_mask, now_features, \
+        batch_size, seq_length, ids, original_seq_length, golden_labels, special_tokens_mask, now_features, \
                 now_game_status, original_batch, batch, original_pred_labels, \
                 token_word_position_map, cumulative_rewards, \
                 original_acc, original_loss, original_prob = \
-                gather_unfinished_examples(ifdone, batch_size, seq_length, original_seq_length, golden_labels, next_special_tokens_mask,
+                gather_unfinished_examples(ifdone, batch_size, seq_length, ids, original_seq_length, golden_labels, next_special_tokens_mask,
                                            next_features, next_game_status,
                                            original_batch, post_batch, original_pred_labels,
                                            token_word_position_map, cumulative_rewards,
@@ -302,35 +298,33 @@ for step, batch in enumerate(eval_dataloader):
                     all_game_step_done_num[future_step].append(1)
             break
 
-        completed_steps += 1
-
     if batch_size != 0:
         # Not successful samples
         unfinished_index = [i for i in range(batch_size)]
 
         all_delta_prob.extend(delta_p.tolist())
-        all_musked_token_rate.extend(musked_token_rate.tolist())
-        all_unmusked_token_rate.extend(unmusked_token_rate.tolist())
+        all_masked_token_rate.extend(masked_token_rate.tolist())
+        all_unmasked_token_rate.extend(unmasked_token_rate.tolist())
 
         # word_masked_rate = get_word_masked_rate(now_game_status, original_seq_length, token_word_position_map)
-        # all_musked_word_rate.extend(word_masked_rate)
+        # all_masked_word_rate.extend(word_masked_rate)
 
         fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, unfinished_index, post_batch,
                                            special_tokens_mask, next_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
         all_fidelity.extend(fidelity_acc.tolist())
 
         if config.use_wandb:
-            save_result(len(unfinished_index), completed_steps, original_batch["input_ids"], post_batch["input_ids"],
+            save_result(len(unfinished_index), game_step + 1, original_batch["input_ids"], post_batch["input_ids"],
                         golden_labels, original_pred_labels, post_pred_labels, delta_p, tokenizer, label_names, wandb_result_table)
 
     all_game_step_done_num[game_step + 1].append(1 - batch_size / batch_size_at_start)
 
 try:
     assert attack_example_num == len(all_delta_prob) == len(all_fidelity) == \
-        len(all_musked_token_rate) == len(all_unmusked_token_rate) # == len(all_musked_word_rate)
+        len(all_masked_token_rate) == len(all_unmasked_token_rate) # == len(all_masked_word_rate)
 except:
     print(f"""{attack_example_num} == {len(all_delta_prob)} == {len(all_fidelity)} ==
-          {len(all_musked_token_rate)} == {len(all_unmusked_token_rate)}""")
+          {len(all_masked_token_rate)} == {len(all_unmasked_token_rate)}""")
 
 
 logger.info("Finish eval!")
@@ -339,9 +333,9 @@ reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num
 reslut["Average Eval Token Length"] = np.mean(all_eval_token_length)
 reslut["Attack Success Rate"] = attack_successful_num / attack_example_num
-reslut["Token Modification Rate"] = np.mean(all_musked_token_rate)
-# reslut["Word Modification Rate"] = np.mean(all_musked_word_rate)
-reslut["Word Left Rate"] = np.mean(all_unmusked_token_rate)
+reslut["Token Modification Rate"] = np.mean(all_masked_token_rate)
+# reslut["Word Modification Rate"] = np.mean(all_masked_word_rate)
+reslut["Word Left Rate"] = np.mean(all_unmasked_token_rate)
 reslut["Average Victim Model Query Times"] = np.mean(all_success_game_step)
 reslut["Fidelity"] = np.mean(all_fidelity)
 reslut["delta_prob"] = np.mean(all_delta_prob)
@@ -359,20 +353,28 @@ if config.use_wandb:
     wandb.log({"trade_off": wandb.plot.line(table, "game_step", "attack_success_rate", title="Attack Success Rate & Game Step Trade Off")})
 
     data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_rate.items()]
-    table2 = wandb.Table(data=data, columns=["game_step", "musked_rate"])
-    wandb.log({"trade_off2": wandb.plot.scatter(table2, "game_step", "musked_rate", title="Musked Rate & Game Step Trade Off")})
+    table2 = wandb.Table(data=data, columns=["game_step", "masked_rate"])
+    wandb.log({"trade_off2": wandb.plot.scatter(table2, "game_step", "masked_rate", title="Musked Rate & Game Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_musk_rate_score.items()]
-    table3 = wandb.Table(data=data, columns=["done_step", "musked_rate"])
-    wandb.log({"trade_off3": wandb.plot.scatter(table3, "done_step", "musked_rate", title="Musked Rate & Done Step Trade Off")})
+    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_mask_rate_score.items()]
+    table3 = wandb.Table(data=data, columns=["done_step", "masked_rate"])
+    wandb.log({"trade_off3": wandb.plot.scatter(table3, "done_step", "masked_rate", title="Musked Rate & Done Step Trade Off")})
 
     data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_token_num.items()]
     table4 = wandb.Table(data=data, columns=["game_step", "mask_token_num"])
     wandb.log({"trade_off4": wandb.plot.line(table4, "game_step", "mask_token_num", title="Musked Token Number & Game Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_musk_token_num.items()]
+    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_mask_token_num.items()]
     table5 = wandb.Table(data=data, columns=["done_step", "mask_token_num"])
     wandb.log({"trade_off5": wandb.plot.scatter(table5, "done_step", "mask_token_num", title="Musked Token Number & Done Step Trade Off")})
+
+    data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_delta_prob.items()]
+    table6 = wandb.Table(data=data, columns=["game_step", "delta_prob"])
+    wandb.log({"trade_off6": wandb.plot.scatter(table6, "game_step", "delta_prob", title="Delta Prob & Game Step Trade Off")})
+
+    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_delta_prob.items()]
+    table7 = wandb.Table(data=data, columns=["done_step", "delta_prob"])
+    wandb.log({"trade_off7": wandb.plot.scatter(table7, "done_step", "delta_prob", title="Delta Prob & Done Step Trade Off")})
 
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()

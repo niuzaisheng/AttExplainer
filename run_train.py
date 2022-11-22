@@ -87,10 +87,8 @@ problem_type = dataset_config["problem_type"]
 num_labels = dataset_config["num_labels"]
 label_names = dataset_config["label_names"]
 text_col_name = dataset_config["text_col_name"]
-if isinstance(text_col_name, list):
-    token_quantity_correction = 3
-else:
-    token_quantity_correction = 2
+token_quantity_correction = dataset_config["token_quantity_correction"] # the number of [CLS],[SEP] special token in an example
+
 
 # For DQN gather single step data into batch from replay buffer
 # input_feature_shape indicates how many dimensions along sequence length
@@ -144,42 +142,42 @@ def save_result(save_batch_size, completed_steps, original_input_ids, post_input
         post_pred_label = post_pred_labels[i].item()
         post_pred_label = label_names[post_pred_label]
         item_delta_p = delta_p[i].item()
-        train_batch_input_ids_example = display_ids(original_input_ids[i], tokenizer, name="train_batch_input_ids")
-        post_batch_input_ids_example = display_ids(post_input_ids[i], tokenizer, name="post_batch_input_ids")
+        train_batch_input_ids_example = display_ids(original_input_ids[i], tokenizer)
+        post_batch_input_ids_example = display_ids(post_input_ids[i], tokenizer)
         wandb_result_table.add_data(completed_steps, golden_label, original_pred_label, post_pred_label, item_delta_p, train_batch_input_ids_example, post_batch_input_ids_example)
 
 
 def get_rewards(original_seq_length, original_prob, post_acc, post_prob, game_status, game_step):
 
     original_seq_length = (torch.FloatTensor(original_seq_length) - token_quantity_correction).to(game_status.device)
-    unmusk_token_num = game_status.sum(dim=1) - token_quantity_correction
-    unmusked_token_rate = unmusk_token_num / original_seq_length
-    musked_token_num = original_seq_length - unmusk_token_num
-    musked_token_rate = 1 - unmusked_token_rate
+    unmask_token_num = game_status.sum(dim=1) - token_quantity_correction
+    unmasked_token_rate = unmask_token_num / original_seq_length
+    masked_token_num = original_seq_length - unmask_token_num
+    masked_token_rate = 1 - unmasked_token_rate
     delta_p = (original_prob - post_prob)
-    unmusked_token_rate = send_to_device(unmusked_token_rate, delta_p.device)
+    unmasked_token_rate = send_to_device(unmasked_token_rate, delta_p.device)
 
     if config.task_type == "attack":
         if_success = torch.logical_not(post_acc.bool()).float()
-        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmusked_token_rate + 10 * if_success * unmusked_token_rate - game_step / config.max_game_steps
+        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmasked_token_rate + 10 * if_success * unmasked_token_rate - game_step / config.max_game_steps
         # post_rewards = 10 * if_success
-        # post_rewards = delta_p + 10 * if_success * unmusked_token_rate
+        post_rewards = delta_p + 10 * if_success * unmasked_token_rate
         # post_rewards = delta_p
-        # post_rewards = 10 * if_success * unmusked_token_rate
-        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmusked_token_rate
+        # post_rewards = 10 * if_success * unmasked_token_rate
+        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmasked_token_rate
 
     elif config.task_type == "explain":
         if_success = (delta_p >= config.done_threshold).float()
-        # post_rewards = delta_p + 10 * if_success * unmusked_token_rate
-        post_rewards = delta_p
+        post_rewards = delta_p + 10 * if_success * unmasked_token_rate
+        # post_rewards = delta_p
 
     ifdone = if_success.clone() # die or win == 1
-    for i in range(unmusk_token_num.size(0)):
-        if unmusk_token_num[i] == token_quantity_correction: # end of game 
+    for i in range(unmask_token_num.size(0)):
+        if unmask_token_num[i] == token_quantity_correction: # end of game 
             ifdone[i] = 1
 
-    # return delta_p, post_rewards, ifdone, if_success, musked_token_rate, unmusked_token_rate
-    return post_rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, musked_token_num, unmusk_token_num
+    # return delta_p, post_rewards, ifdone, if_success, masked_token_rate, unmasked_token_rate
+    return post_rewards, ifdone, if_success, delta_p, masked_token_rate, unmasked_token_rate, masked_token_num, unmask_token_num
 
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
@@ -198,9 +196,7 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
                 extracted_features = get_EI_attention_features(post_outputs, seq_length)
 
     else:
-        post_outputs = transformer_model(**post_batch, output_attentions=True)
-        extracted_features = get_gradient_features(post_outputs, seq_length, post_batch["input_ids"], embedding_weight_tensor)
-        embedding_weight_tensor.grad.zero_()
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels)
 
     post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
     post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
@@ -228,6 +224,7 @@ for epoch in range(config.max_train_epoch):
 
     for step, batch in enumerate(simulate_dataloader):
 
+        ids = batch.pop("id")
         seq_length = batch.pop("seq_length")  # vailid tokens num in each sequence, a list of int
         batch_max_seq_length = max(seq_length)
         golden_labels = batch.pop("labels")
@@ -270,7 +267,7 @@ for epoch in range(config.max_train_epoch):
             post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
             next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
                                                                                        lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
-            rewards, ifdone, if_success, delta_p, musked_token_rate, unmusked_token_rate, _, _ = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
+            rewards, ifdone, if_success, delta_p, masked_token_rate, unmasked_token_rate, _, _ = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
             
             dqn.store_transition(batch_size, special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
 
@@ -285,8 +282,8 @@ for epoch in range(config.max_train_epoch):
 
                     update_dict(exp_name, progress_bar, {
                         "done_rewards": rewards[removed_index].mean().item(),
-                        "done_musked_token_rate": musked_token_rate[removed_index].mean().item(),
-                        "done_unmusked_token_rate": unmusked_token_rate[removed_index].mean().item(),
+                        "done_masked_token_rate": masked_token_rate[removed_index].mean().item(),
+                        "done_unmasked_token_rate": unmasked_token_rate[removed_index].mean().item(),
                         "done_delta_p": delta_p[removed_index].mean().item(),
                         "done_fidelity_plus": fidelity_plus.mean().item(),
                         "done_cumulative_rewards": cumulative_rewards[removed_index].mean().item(),
@@ -305,19 +302,20 @@ for epoch in range(config.max_train_epoch):
                     "post_loss": post_loss.mean().item(),
                     "post_acc": post_acc.mean().item(),
                     "rewards": rewards.mean().item(),
-                    "unmusked_token_rate": unmusked_token_rate.mean().item(),
-                    "musked_token_rate": musked_token_rate.mean().item(),
+                    "unmasked_token_rate": unmasked_token_rate.mean().item(),
+                    "masked_token_rate": masked_token_rate.mean().item(),
                     "ifdone": ifdone.mean().item(),
                     "delta_p": delta_p.mean().item(),
                     "game_step": game_step,
                 }, step=completed_steps)
 
             # Remove those completed samples and parpare for next game step
-            batch_size, seq_length, original_seq_length, golden_labels, special_tokens_mask, now_features, \
+            batch_size, seq_length, ids, original_seq_length, golden_labels, special_tokens_mask, now_features, \
                 now_game_status, original_batch, batch, original_pred_labels, \
                 token_word_position_map, cumulative_rewards, \
                 original_acc, original_loss, original_prob = \
-                gather_unfinished_examples(ifdone, batch_size, seq_length, original_seq_length, golden_labels, next_special_tokens_mask,
+                gather_unfinished_examples(ifdone, batch_size, seq_length, ids, original_seq_length, golden_labels, 
+                                           next_special_tokens_mask,
                                            next_features, next_game_status,
                                            original_batch, post_batch, original_pred_labels,
                                            token_word_position_map, cumulative_rewards,
