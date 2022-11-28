@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 from collections import defaultdict
 
 import numpy as np
@@ -20,6 +20,8 @@ input_feature_shape_dict = {
     "random": 2,
     "effective_information": 1,
     "gradient": 2,
+    "original_embedding": 2,
+    "input_ids": 1,
 }
 
 
@@ -189,24 +191,11 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
     return stack
 
 
-# def get_gradient_features(model_outputs, batch_seq_len, input_ids, embedding_weight_tensor):
-#     batch_size = len(batch_seq_len)
-#     seq_len = input_ids.size(-1)
-#     model_rep_dim = embedding_weight_tensor.size(-1)
-
-#     logits = model_outputs.logits
-#     logits.backward(torch.ones(logits.size(), device=logits.device)) # 此处有问题，需要修改
-#     grad = torch.zeros((batch_size, seq_len, model_rep_dim), requires_grad=False)
-#     for i in range(batch_size):
-#         example_grad = embedding_weight_tensor.grad[input_ids[i]]
-#         grad[i] = example_grad * embedding_weight_tensor[input_ids[i]]
-
-#     return grad.detach()  # [batch_size, seq_len, model_rep_dim]
-
-
 def layer_forward_hook(module, hook_inputs, hook_outputs, embedding_saver):
     embedding_saver.append(hook_outputs)
 
+def keep_tensor_in_same_device(*args, device):
+    return [arg.to(device) for arg in args]
 
 def get_gradient_features(transformer_model, post_batch, original_pred_labels):
 
@@ -223,7 +212,19 @@ def get_gradient_features(transformer_model, post_batch, original_pred_labels):
         label_logits = logits[torch.arange(logits.size(0), device=logits.device), original_pred_labels]
         grads = torch.autograd.grad(torch.unbind(label_logits), input_embedding)[0]  # [batch_size, seq_len, model_rep_dim]
         grads = grads * input_embedding  # grad * input_embedding
+        # grads = grads  # only grad 
     return grads.detach(), model_outputs
+
+
+def use_original_embedding_as_features(transformer_model, post_batch):
+    embedding_layer = transformer_model.bert.embeddings
+    embedding_saver = []
+    with torch.no_grad():
+        hook = embedding_layer.register_forward_hook(partial(layer_forward_hook, embedding_saver=embedding_saver))
+        model_outputs = transformer_model(**post_batch)
+        hook.remove()
+        input_embedding = embedding_saver[0]
+    return input_embedding.detach(), model_outputs
 
 
 def batch_loss(model_output, y_ref, num_labels, device=None):
@@ -439,6 +440,20 @@ def get_most_free_gpu_index():
     return gpu_usage.index(min(gpu_usage))
 
 
+class GameEnvironmentVariables(NamedTuple):
+
+    rewards: Tensor
+    if_done: Tensor
+    if_success: Tensor
+    delta_prob: Tensor
+    masked_token_rate: Tensor
+    unmasked_token_rate: Tensor
+    masked_token_num: Tensor
+    unmask_token_num: Tensor
+    delta_logits: Tensor
+    delta_loss: Tensor
+
+
 # TokenModifyTracker and assist tracking functions
 class TokenModifyTracker:
     """
@@ -493,19 +508,22 @@ class TokenModifyTracker:
         self.done_step = None
         self.fidelity = None
         self.post_input_ids = None
+        self.post_pred_label = None
 
     def update(self,
                action: int,
                if_done: bool,
                if_success: bool,
-               reward: float,  # step reward
-               post_prob: float,
-               post_logits: float,
-               post_loss: float,
-               delta_prob: float,
-               delta_logits: float,
-               masked_token_rate: float,
-               masked_token_num: int):
+               rewards: float,  # step reward
+               post_prob: float = None,
+               post_pred_label: int = None,
+               post_logits: float = None,
+               post_loss: float = None,
+               delta_prob: float = None,
+               delta_logits: float = None,
+               masked_token_rate: float = None,
+               masked_token_num: int = None,
+               **kwargs):
 
         if self.done_step is not None:
             raise Exception("Tracker is done, can't update")
@@ -514,7 +532,8 @@ class TokenModifyTracker:
             # in delete mode, delete index from origional_index and add to modified_index_order
             origional_index = self.left_index[action]
             self.modified_index_order.append(origional_index)
-            self.left_index.remove(action)
+            self.left_index.remove(origional_index)
+
         elif self.token_replacement_strategy == "mask":
             # in mask mode, add index to modified_index_order
             origional_index = self.left_index[action]
@@ -525,8 +544,9 @@ class TokenModifyTracker:
         assert not (not if_done and if_success), "Can't be success but not done"
         self.if_done = if_done
         self.if_success = if_success
-        self.rewards.append(reward)
+        self.rewards.append(rewards)
         self.prob.append(post_prob)
+        self.post_pred_label = post_pred_label
         self.logits.append(post_logits)
         self.loss.append(post_loss)
         self.delta_prob.append(delta_prob)
@@ -544,39 +564,56 @@ class TokenModifyTracker:
 
     @property
     def token_saliency(self):
-        saliency = defaultdict(0.0)
+        saliency = defaultdict(float)
         last_prob = self.original_prob
         for token_index, prob in zip(self.modified_index_order, self.prob):
             saliency[token_index] = last_prob - prob
             last_prob = prob
         return [saliency[i] for i in range(self.original_seq_length)]
 
-    def save_result_row(self, tokenizer, label_names, wandb_result_table):
+    def save_result_row(self, tokenizer, label_names, wandb_result_table, completed_steps=None):
         golden_label = label_names[self.golden_label]
         original_pred_label = label_names[self.original_pred_label]
         post_pred_label = label_names[self.post_pred_label]
         original_input_ids = display_ids(self.input_ids, tokenizer)
         post_input_ids = display_ids(self.post_input_ids, tokenizer)
-        wandb_result_table.add_data(self.id, self.done_step, golden_label, original_pred_label, self.original_prob,
-                                    post_pred_label, self.prob[-1], self.delta_prob[-1], self.masked_token_rate[-1], self.masked_token_num[-1],
-                                    self.modified_index_order, self.prob, self.rewards, self.delta_prob, self.token_saliency,
-                                    self.masked_token_rate, self.masked_token_num,
-                                    self.fidelity, original_input_ids, post_input_ids)
+        if completed_steps is not None:  # when train
+            wandb_result_table.add_data(completed_steps, self.id, self.done_step, golden_label, original_pred_label, self.original_prob,
+                                        post_pred_label, self.prob[-1], self.delta_prob[-1], self.masked_token_rate[-1], self.masked_token_num[-1],
+                                        self.modified_index_order, self.prob, self.rewards, self.delta_prob, self.token_saliency,
+                                        self.masked_token_rate, self.masked_token_num,
+                                        self.fidelity, original_input_ids, post_input_ids)
+        else:  # when eval
+            wandb_result_table.add_data(self.id, self.done_step, golden_label, original_pred_label, self.original_prob,
+                                        post_pred_label, self.prob[-1], self.delta_prob[-1], self.masked_token_rate[-1], self.masked_token_num[-1],
+                                        self.modified_index_order, self.prob, self.rewards, self.delta_prob, self.token_saliency,
+                                        self.masked_token_rate, self.masked_token_num,
+                                        self.fidelity, original_input_ids, post_input_ids)
 
 
-def create_result_table():
+def create_result_table(mode="test"):
     import wandb
     table_columns = ["id", "done_step", "golden_label", "original_pred_label", "original_pred_prob",
-                     "post_pred_label", "post_pred_prob", "delta_p", "masked_token_rate", "masked_token_num",
+                     "post_pred_label", "post_pred_prob", "delta_prob", "masked_token_rate", "masked_token_num",
                      "modified_index_order", "step_prob", "step_rewards", "step_delta_prob", "token_saliency",
                      "step_masked_token_rate", "step_masked_token_num",
                      "fidelity", "original_input_ids", "post_input_ids"]
+    if mode == "train":
+        table_columns = ["completed_steps", ] + table_columns
     return wandb.Table(columns=table_columns)
 
 
 def create_trackers(ids, original_seq_length, input_ids, token_word_position_map,
                     golden_labels, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
                     token_quantity_correction, token_replacement_strategy):
+
+    golden_labels = golden_labels.view(-1).tolist()
+    original_acc = original_acc.tolist()
+    original_pred_labels = original_pred_labels.view(-1).tolist()
+    original_prob = original_prob.tolist()
+    original_logits = original_logits.tolist()
+    original_loss = original_loss.tolist()
+
     trackers = []
     for i in range(len(ids)):
         trackers.append(TokenModifyTracker(ids[i], original_seq_length[i], input_ids[i], token_word_position_map[i],
@@ -585,16 +622,20 @@ def create_trackers(ids, original_seq_length, input_ids, token_word_position_map
     return trackers
 
 
-def update_trackers(trackers: List[TokenModifyTracker], **kwargs):
-
+def update_trackers(trackers: List[TokenModifyTracker], variables: GameEnvironmentVariables = None, **kwargs):
     # all kwargs are tensor
     # convert all tensor to list
-    for key in kwargs.keys():
-        kwargs[key] = kwargs[key].tolist()
+    dic = {}
+    if variables:
+        for key, value in variables._asdict().items():
+            if value is not None:
+                dic[key] = value.tolist()
+        for key in kwargs.keys():
+            dic[key] = kwargs[key].tolist()
 
     # update trackers
     for i in range(len(trackers)):
-        trackers[i].update(**{key: kwargs[key][i] for key in kwargs.keys()})
+        trackers[i].update(**{key: dic[key][i] for key in dic.keys()})
 
 
 def gather_unfinished_examples_with_tracker(if_done: Tensor,
@@ -604,8 +645,7 @@ def gather_unfinished_examples_with_tracker(if_done: Tensor,
                                             special_tokens_mask: Tensor,
                                             features: Tensor,
                                             game_status: Tensor,
-                                            batch: Dict[str, Tensor]
-                                            ):
+                                            batch: Dict[str, Tensor]):
 
     batch_size = len(trackers)
     left_index = [i for i in range(batch_size) if if_done[i].item() == 0]

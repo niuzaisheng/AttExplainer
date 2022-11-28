@@ -57,6 +57,20 @@ class DQNNet1D(nn.Module):
         x = self.layer(x)
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
+class DQNNet2D(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.layer1 = nn.Linear(768, 8)
+        self.out = nn.Linear(8+1, 1)
+
+    def forward(self, x, s):
+        batch_size, _, max_seq_len, dim = x.size()  # [B, seq, seq, dim]
+        x = self.layer1(x[:, 0])  # [B, seq, 8]
+        x = torch.relu(x)
+        x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
+        x = self.out(x)  # [B, seq, 1]
+        return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
 class DQNNet4Grad(nn.Module):
 
@@ -72,6 +86,21 @@ class DQNNet4Grad(nn.Module):
         x = self.out(x)  # [B, seq, 1]
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
+class DQNNetEmbedding(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.embedding = nn.Embedding(config.vocab_size, 128)
+        self.layer1 = nn.Linear(128, 8)
+        self.out = nn.Linear(8+1, 1)
+
+    def forward(self, input_ids , s):
+        batch_size, _, max_seq_len = input_ids.size()
+        x = self.embedding(input_ids[:, 0])  # [B, seq, dim]
+        x = self.layer1(x)  # [B, seq, 8]
+        x = torch.relu(x)
+        x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
+        x = self.out(x)  # [B, seq, 1]
+        return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
 def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
     """
@@ -97,7 +126,7 @@ def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
             batch_features = torch.stack(batch_features)
             out_dict[k] = batch_features
         else:
-            if "done" in k or k in ["actions", "rewards"]:
+            if k in ["if_success", "actions", "rewards"]:
                 out_dict[k] = torch.stack([item[k] for item in tensors])
             elif k != "seq_length":
                 out_dict[k] = pad_sequence([item[k] for item in tensors], batch_first=True)
@@ -107,7 +136,7 @@ def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
 BufferItem = namedtuple("BufferItem", ("now_special_tokens_mask", "next_special_tokens_mask",
                                        "now_features", "next_features",
                                        "actions", "game_status", "next_game_status",
-                                       "seq_length", "rewards", "ifdone"))
+                                       "seq_length", "rewards", "if_success"))
 
 
 class DQN(object):
@@ -123,19 +152,22 @@ class DQN(object):
         self.input_feature_shape = input_feature_shape
         self.token_replacement_strategy = config.token_replacement_strategy
 
+        ModelClass = None
         if config.features_type == "gradient":
-            self.eval_net = DQNNet4Grad(config)
-            if not do_eval:
-                self.target_net = DQNNet4Grad(config)
+            ModelClass = DQNNet4Grad
+        elif config.features_type == "original_embedding":
+            ModelClass = DQNNet2D
+        elif config.features_type == "input_ids":
+            ModelClass = DQNNetEmbedding
         else:
             if input_feature_shape == 2:
-                self.eval_net = DQNNet(config)
-                if not do_eval:
-                    self.target_net = DQNNet(config)
+                ModelClass = DQNNet
             elif input_feature_shape == 1:
-                self.eval_net = DQNNet1D(config)
-                if not do_eval:
-                    self.target_net = DQNNet1D(config)
+                ModelClass = DQNNet1D
+
+        self.eval_net = ModelClass(config)
+        if not do_eval:
+            self.target_net = ModelClass(config)
 
         if do_eval:
             with open(config.dqn_weights_path, "rb") as f:
@@ -241,13 +273,13 @@ class DQN(object):
             game_status[i, index:] = 0
         return actions.to(device), game_status.to(device)
 
-    def store_transition(self, batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, ifdone):
+    def store_transition(self, batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, if_success):
         if self.do_eval:
             raise Exception("Could not store transitions when do_eval!")
 
         self.eval_net.eval()
         with torch.no_grad():
-            q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone).detach()
+            q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, if_success).detach()
 
         now_special_tokens_mask = send_to_device(now_special_tokens_mask, "cpu")
         next_special_tokens_mask = send_to_device(next_special_tokens_mask, "cpu")
@@ -257,7 +289,7 @@ class DQN(object):
         next_game_status = send_to_device(next_game_status, "cpu")
         actions = send_to_device(actions, "cpu")
         rewards = send_to_device(rewards, "cpu")
-        ifdone = send_to_device(ifdone, "cpu")
+        if_success = send_to_device(if_success, "cpu")
         q_loss = send_to_device(q_loss, "cpu").numpy()
 
         for i in range(batch_size):
@@ -270,14 +302,14 @@ class DQN(object):
                                   next_game_status=next_game_status[i],
                                   seq_length=batch_seq_length[i],
                                   rewards=rewards[i],
-                                  ifdone=ifdone[i],
+                                  if_success=if_success[i],
                                   )
             self.memory.add(q_loss[i], new_item)
 
-    def get_td_loss(self, batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone):
+    def get_td_loss(self, batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, if_success):
         if self.do_eval:
             raise Exception("Could not get_td_loss when do_eval!")
-        ifdone = ifdone.float()
+        if_success = if_success.float()
         now_features = send_to_device(now_features, self.device)
         game_status = send_to_device(game_status, self.device)
         q_eval = self.eval_net(now_features, game_status)
@@ -298,7 +330,7 @@ class DQN(object):
                 q_target = q_target.gather(1, target_actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
         # q_target = q_target.masked_select(actions)
-        q_target = rewards + self.gamma * (1 - ifdone) * q_target.detach()
+        q_target = rewards + self.gamma * (1 - if_success) * q_target.detach()
 
         q_loss = self.loss_func(q_eval, q_target)   # [B]
 
@@ -328,10 +360,10 @@ class DQN(object):
         next_game_status = samples["next_game_status"]
         actions = samples["actions"]
         rewards = samples["rewards"]
-        ifdone = samples["ifdone"]
+        if_success = samples["if_success"]
 
         self.eval_net.train()
-        q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, ifdone)
+        q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, if_success)
 
         q_loss_detached = q_loss.detach()
         for i in range(valid_sample_num):

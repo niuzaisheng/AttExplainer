@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
-                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "original_embedding","input_ids"])
+                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "original_embedding", "input_ids"])
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
@@ -87,7 +87,7 @@ problem_type = dataset_config["problem_type"]
 num_labels = dataset_config["num_labels"]
 label_names = dataset_config["label_names"]
 text_col_name = dataset_config["text_col_name"]
-token_quantity_correction = dataset_config["token_quantity_correction"] # the number of [CLS],[SEP] special token in an example
+token_quantity_correction = dataset_config["token_quantity_correction"]  # the number of [CLS],[SEP] special token in an example
 
 # For DQN gather single step data into batch from replay buffer
 # input_feature_shape indicates how many dimensions along sequence length
@@ -97,10 +97,11 @@ input_feature_shape = input_feature_shape_dict[config.features_type]
 if config.use_wandb:
     import wandb
     wandb.init(name=exp_name, project=config.wandb_project_name, config=config)
-    wandb_result_table = create_result_table()
+    wandb_result_table = create_result_table("train")
 
 tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
 MASK_TOKEN_ID = tokenizer.mask_token_id
+config.vocab_size = tokenizer.vocab_size
 
 logger.info("Start loading!")
 transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_model(config, dataset_config, tokenizer)
@@ -111,13 +112,21 @@ for _, batch in enumerate(simulate_dataloader):
     logger.info(batch)
     break
 
-status_dict = {}  # for tqdm display some info
-def update_dict(name, progress_bar, any_dict, step):
-    status_dict.update(any_dict)
-    progress_bar.set_postfix(status_dict)
-    if config.use_wandb:
-        wandb.log({name: any_dict})
 
+def record_results(completed_steps, transformer_model, trackers, finished_index, post_batch,
+                   special_tokens_mask, game_status, original_pred_labels, lm_device):
+    if config.token_replacement_strategy == "mask":
+        fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, finished_index, post_batch,
+                                                       special_tokens_mask, game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+    elif config.token_replacement_strategy == "delete":
+        fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
+                                                     special_tokens_mask, game_status, original_pred_labels, lm_device)
+
+    for i, batch_index in enumerate(finished_index):
+        trackers[batch_index].fidelity = fidelity_acc[i].item()
+        trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
+        if config.use_wandb:
+            trackers[batch_index].save_result_row(tokenizer, label_names, wandb_result_table, completed_steps=completed_steps)
 
 
 def get_rewards(original_seq_length=None,
@@ -125,42 +134,57 @@ def get_rewards(original_seq_length=None,
                 post_acc=None, post_prob=None, post_logits=None, post_loss=None,
                 game_status=None, game_step=None):
 
-    original_seq_length = (torch.FloatTensor(original_seq_length) - token_quantity_correction).to(game_status.device)
+    device = game_status.device
+    original_seq_length = (torch.FloatTensor(original_seq_length).to(device) - token_quantity_correction)
     unmask_token_num = game_status.sum(dim=1) - token_quantity_correction
     unmasked_token_rate = unmask_token_num / original_seq_length
     masked_token_num = original_seq_length - unmask_token_num
     masked_token_rate = 1 - unmasked_token_rate
     delta_prob = (original_prob - post_prob)
+    delta_logits = None
     if original_logits is not None and post_logits is not None:
         delta_logits = (original_logits - post_logits)
+    delta_loss = None
+    if original_loss is not None and post_loss is not None:
+        delta_loss = (original_loss - post_loss)
 
     if config.task_type == "attack":
         if_success = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
-        # post_rewards = torch.clip((post_loss - original_loss), 0) * unmasked_token_rate + 10 * if_success * unmasked_token_rate - game_step / config.max_game_steps
-        # post_rewards = 10 * if_success
-        post_rewards = delta_prob + 10 * if_success * unmasked_token_rate
-        # post_rewards = delta_p
-        # post_rewards = 10 * if_success * unmasked_token_rate
-        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmasked_token_rate
+        # rewards = torch.clip((post_loss - original_loss), 0) * unmasked_token_rate + 10 * if_success * unmasked_token_rate - game_step / config.max_game_steps
+        # rewards = 10 * if_success
+        rewards = delta_prob + 10 * if_success * unmasked_token_rate
+        # rewards = delta_p
+        # rewards = 10 * if_success * unmasked_token_rate
+        # rewards = torch.clip(delta_prob 0) + 10 * if_success * unmasked_token_rate
 
     elif config.task_type == "explain":
         if_success = (delta_prob >= config.done_threshold).float()
-        post_rewards = delta_prob + 10 * if_success * unmasked_token_rate
-        # post_rewards = delta_p
+        rewards = delta_prob + 10 * if_success * unmasked_token_rate
+        # rewards = delta_p
 
-    ifdone = if_success.clone() # die or win == 1
+    if_done = if_success.clone()  # die or win == 1
     for i in range(unmask_token_num.size(0)):
-        if unmask_token_num[i] == token_quantity_correction: # end of game 
-            ifdone[i] = 1
+        if unmask_token_num[i] == token_quantity_correction:  # end of game
+            if_done[i] = 1
 
-    # return delta_prob, post_rewards, ifdone, if_success, masked_token_rate, unmasked_token_rate
-    return post_rewards, ifdone, if_success, delta_prob, masked_token_rate, unmasked_token_rate, masked_token_num, unmask_token_num
+    return GameEnvironmentVariables(
+        rewards=rewards,
+        if_done=if_done,
+        if_success=if_success,
+        delta_prob=delta_prob,
+        masked_token_rate=masked_token_rate,
+        unmasked_token_rate=unmasked_token_rate,
+        masked_token_num=masked_token_num,
+        unmask_token_num=unmask_token_num,
+        delta_logits=delta_logits,
+        delta_loss=delta_loss,
+    )
 
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
     post_batch = send_to_device(post_batch, lm_device)
-    if features_type != "gradient":
+    if features_type == "gradient":
         extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels)
     elif features_type == "original_embedding":
         extracted_features, post_outputs = use_original_embedding_as_features(transformer_model, post_batch)
@@ -175,22 +199,32 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
                 extracted_features = get_random_attention_features(post_outputs, config.bins_num)
             elif features_type == "effective_information":
                 extracted_features = get_EI_attention_features(post_outputs, seq_length)
-            if features_type == "input_ids":
+            elif features_type == "input_ids":
                 extracted_features = post_batch["input_ids"]
             else:
                 raise NotImplementedError(f"features_type {features_type} not implemented")
 
     post_acc, post_pred_labels, post_prob = batch_accuracy(post_outputs, original_pred_labels, device=dqn_device)
-    post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
-
+    # post_logits = batch_logits(post_outputs, original_pred_labels, device=dqn_device)
+    # post_loss = batch_loss(post_outputs, original_pred_labels, num_labels, device=dqn_device)
     now_features = extracted_features.unsqueeze(1)
 
-    return now_features, post_acc, post_loss, post_prob, post_pred_labels
+    return now_features, post_acc, post_prob, post_pred_labels
 
 
 dqn = DQN(config, do_eval=False, mask_token_id=MASK_TOKEN_ID, input_feature_shape=input_feature_shape)
 progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader), disable=config.disable_tqdm)
-exp_name = "simulate"
+exp_name = "train"
+
+status_dict = {}  # for tqdm display some info
+
+
+def update_dict(any_dict, step):
+    status_dict.update(any_dict)
+    progress_bar.set_postfix(status_dict)
+    if config.use_wandb:
+        wandb.log({exp_name: any_dict}, step=step)
+
 
 lm_device = torch.device("cuda", config.gpu_index)
 transformer_model = send_to_device(transformer_model, lm_device)
@@ -198,7 +232,7 @@ transformer_model.eval()
 
 completed_steps = 0
 for epoch in range(config.max_train_epoch):
-    update_dict(exp_name, progress_bar, {"epoch": epoch}, completed_steps)
+    update_dict({"epoch": epoch}, completed_steps)
 
     for step, batch in enumerate(simulate_dataloader):
 
@@ -216,9 +250,13 @@ for epoch in range(config.max_train_epoch):
             original_outputs = transformer_model(**batch, output_attentions=True)
 
         original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device=dqn.device)
+        original_logits = batch_logits(original_outputs, original_pred_labels, device=dqn.device)
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
-        update_dict(exp_name, progress_bar, {"original_prob": original_prob.mean().item()}, completed_steps)
+        update_dict({"original_prob": original_prob.mean().item()}, completed_steps)
+        trackers = create_trackers(ids, seq_length, batch["input_ids"], token_word_position_map,
+                                   golden_labels, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
+                                   token_quantity_correction, config.token_replacement_strategy)
 
         batch_size = len(seq_length)
         if config.do_pre_deletion:
@@ -234,79 +272,60 @@ for epoch in range(config.max_train_epoch):
         original_seq_length = copy.deepcopy(seq_length)
 
         actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
-        now_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, batch, seq_length, config.bins_num,
-                                                                                  lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
+        now_features, post_acc, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, batch, seq_length, config.bins_num,
+                                                                       lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
 
         batch_done_step = []
-        cumulative_rewards = 0
 
         for game_step in range(config.max_game_steps):
 
             post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
-            next_features, post_acc, post_loss, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
-                                                                                       lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
-            rewards, ifdone, if_success, delta_prob, masked_token_rate, unmasked_token_rate, _, _ = get_rewards(original_seq_length, original_prob, post_acc, post_prob, next_game_status, game_step)
-            
-            dqn.store_transition(batch_size, special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, rewards, ifdone)
+            next_features, post_acc, post_prob, post_pred_labels = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config.bins_num,
+                                                                            lm_device=lm_device, dqn_device=dqn.device, features_type=config.features_type)
 
-            cumulative_rewards += rewards
-            removed_index = [i for i in range(batch_size) if ifdone[i].item() == 1]
-            if len(removed_index) != 0:
-                batch_done_step.extend([game_step] * len(removed_index))
+            r = get_rewards(original_seq_length=original_seq_length, original_acc=original_acc, original_prob=original_prob, post_acc=post_acc, post_prob=post_prob, game_status=next_game_status)
+
+            dqn.store_transition(batch_size, special_tokens_mask, next_special_tokens_mask, now_features, next_features, now_game_status, next_game_status, actions, seq_length, r.rewards, r.if_success)
+
+            update_trackers(trackers, variables=r, action=actions, post_prob=post_prob, post_pred_label=post_pred_labels.view(-1))
+
+            success_index = [i for i in range(batch_size) if r.if_done[i].item() == 1]
+            if len(success_index) != 0:
+                batch_done_step.extend([game_step] * len(success_index))
                 if completed_steps % 10 == 0:
-                    finished_index = removed_index
-                    fidelity_plus, _ = compute_fidelity_when_masked(transformer_model, finished_index, batch,
-                                                        special_tokens_mask, now_game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
-
-                    update_dict(exp_name, progress_bar, {
-                        "done_rewards": rewards[removed_index].mean().item(),
-                        "done_masked_token_rate": masked_token_rate[removed_index].mean().item(),
-                        "done_unmasked_token_rate": unmasked_token_rate[removed_index].mean().item(),
-                        "done_delta_prob": delta_prob[removed_index].mean().item(),
-                        "done_fidelity_plus": fidelity_plus.mean().item(),
-                        "done_cumulative_rewards": cumulative_rewards[removed_index].mean().item(),
-                        "game_step": game_step,
+                    finished_index = success_index
+                    update_dict({
+                        "done_rewards": r.rewards[success_index].mean().item(),
+                        "done_masked_token_rate": r.masked_token_rate[success_index].mean().item(),
+                        "done_unmasked_token_rate": r.unmasked_token_rate[success_index].mean().item(),
+                        "done_delta_prob": r.delta_prob[success_index].mean().item(),
                     }, step=completed_steps)
-
-                if completed_steps % 1000 == 0:
-                    if config.use_wandb:
-                        save_result(len(removed_index), completed_steps,
-                                    original_batch["input_ids"][removed_index], post_batch["input_ids"][removed_index],
-                                    golden_labels[removed_index], original_pred_labels[removed_index], post_pred_labels[removed_index],
-                                    delta_prob[removed_index], tokenizer, wandb_result_table)
+                if completed_steps % 100 == 0:
+                    record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
             if completed_steps % 10 == 0:
-                update_dict(exp_name, progress_bar, {
-                    "post_loss": post_loss.mean().item(),
+                update_dict({
                     "post_acc": post_acc.mean().item(),
-                    "rewards": rewards.mean().item(),
-                    "unmasked_token_rate": unmasked_token_rate.mean().item(),
-                    "masked_token_rate": masked_token_rate.mean().item(),
-                    "ifdone": ifdone.mean().item(),
-                    "delta_prob": delta_prob.mean().item(),
-                    "game_step": game_step,
+                    "rewards": r.rewards.mean().item(),
+                    "unmasked_token_rate": r.unmasked_token_rate.mean().item(),
+                    "masked_token_rate": r.masked_token_rate.mean().item(),
+                    "if_done": r.if_done.mean().item(),
+                    "delta_prob": r.delta_prob.mean().item(),
                 }, step=completed_steps)
 
-            # Remove those completed samples and parpare for next game step
-            batch_size, seq_length, ids, original_seq_length, golden_labels, special_tokens_mask, now_features, \
-                now_game_status, original_batch, batch, original_pred_labels, \
-                token_word_position_map, cumulative_rewards, \
-                original_acc, original_loss, original_prob = \
-                gather_unfinished_examples(ifdone, batch_size, seq_length, ids, original_seq_length, golden_labels, 
-                                           next_special_tokens_mask,
-                                           next_features, next_game_status,
-                                           original_batch, post_batch, original_pred_labels,
-                                           token_word_position_map, cumulative_rewards,
-                                           original_acc, original_loss, original_prob)
+            batch_size, trackers, seq_length, original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss, \
+                special_tokens_mask, now_features, now_game_status, batch = \
+                gather_unfinished_examples_with_tracker(r.if_done, trackers, seq_length,
+                                                        original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
+                                                        next_special_tokens_mask, next_features, next_game_status, post_batch)
 
             if config.token_replacement_strategy == "delete":
                 seq_length = [x-1 for x in seq_length]
 
             completed_steps += 1
-
             if completed_steps % 10 == 9:
                 dqn_loss = dqn.learn()
-                update_dict(exp_name, progress_bar, {"dqn_loss": dqn_loss}, step=completed_steps)
+                update_dict({"dqn_loss": dqn_loss}, step=completed_steps)
 
             if completed_steps % config.save_step_iter == 0:
                 if not os.path.isdir(save_file_dir):
@@ -316,24 +335,15 @@ for epoch in range(config.max_train_epoch):
                     torch.save(dqn.eval_net.state_dict(), f)
                     logger.info(f"checkpoint saved in {file_name}")
 
-                if config.use_wandb:
-                    wandb.log({"input_ids": wandb_result_table})
-                    wandb_result_table = wandb.Table(columns=table_columns)
+                # BUG record_results original_pred_labels is reflash by gather_unfinished_examples_with_tracker
+                # record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
             if batch_size == 0:
-                update_dict(exp_name, progress_bar, {"all_done_step": game_step}, step=completed_steps)
+                update_dict({"all_done_step": game_step}, step=completed_steps)
                 break
 
-        if batch_size != 0:
-            # Can't reach finish status examples.
-            if config.use_wandb:
-                save_result(batch_size, completed_steps,
-                            original_batch["input_ids"], post_batch["input_ids"],
-                            golden_labels, original_pred_labels, post_pred_labels,
-                            delta_prob, tokenizer, wandb_result_table)
-
         done_rate = 1 - batch_size / batch_size_at_start
-        update_dict(exp_name, progress_bar, {"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
+        update_dict({"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
         progress_bar.update(1)
 
 
