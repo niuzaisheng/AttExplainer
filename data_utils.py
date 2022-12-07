@@ -207,8 +207,9 @@ def esnli_double_sentence_data_collator(features, tokenizer):
 
 ### For processing eraser_cose dataset
 def cose_example_map(example, tokenizer, label_names):
-   
+    # TODO Add new dataset
     doc_id = example["doc_id"]
+
 
 
 
@@ -314,10 +315,11 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         dataset = load_dataset(config.data_set_name)
         label_dict = {0: 1, 1: 2, 2: 0}
 
-        def fix_label(example):
+        def add_id_and_fix_label(example):
+            example["id"] = hash(example["premise"]+ example["hypothesis"])
             example["label"] = label_dict[example["label"]]
             return example
-        dataset = dataset.filter(lambda example: example['label'] != -1).map(fix_label)
+        dataset = dataset.filter(lambda example: example['label'] != -1).map(add_id_and_fix_label)
         train_dataset = dataset["train"]
         eval_dataset = dataset["validation"]
 
@@ -349,7 +351,7 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
 
     elif config.data_set_name in ["sst2"]:
         dataset = load_dataset("glue", config.data_set_name)
-        dataset = dataset.remove_columns(["idx"])
+        dataset = dataset.rename_column("idx", "id")
         train_dataset = dataset["train"]
         eval_dataset = dataset["validation"]
 

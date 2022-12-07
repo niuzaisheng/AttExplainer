@@ -38,14 +38,14 @@ def parse_args():
     parser.add_argument("--dqn_batch_size", type=int, default=256)
     parser.add_argument("--epsilon", type=float, default=0.7)
     parser.add_argument("--gamma", type=float, default=0.9)
-    parser.add_argument("--use_ddqn", action="store_true", default=False)
+    parser.add_argument("--use_ddqn", action="store_true", default=True)
     parser.add_argument("--use_categorical_policy", action="store_true", default=False)
 
     # Game Settings
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
-                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "original_embedding", "input_ids"])
+                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "gradient_input", "original_embedding", "input_ids"])
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--gpu_index", type=int, default=0)
     parser.add_argument("--is_agent_on_GPU", type=bool, default=True)
     parser.add_argument("--max_train_epoch", type=int, default=1000)
+    parser.add_argument("--max_sampling_steps", type=int, default=None)
     parser.add_argument("--save_step_iter", type=int, default=10000)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--eval_test_batch_size", type=int, default=32)
@@ -164,7 +165,7 @@ def get_rewards(original_seq_length=None,
 
     if_done = if_success.clone()  # die or win == 1
     for i in range(unmask_token_num.size(0)):
-        if unmask_token_num[i] == token_quantity_correction:  # end of game
+        if unmask_token_num[i] == 0:  # end of game
             if_done[i] = 1
 
     return GameEnvironmentVariables(
@@ -185,7 +186,9 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
 
     post_batch = send_to_device(post_batch, lm_device)
     if features_type == "gradient":
-        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels)
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=False)
+    elif features_type == "gradient_input":
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=True)
     elif features_type == "original_embedding":
         extracted_features, post_outputs = use_original_embedding_as_features(transformer_model, post_batch)
     else:
@@ -231,6 +234,8 @@ transformer_model = send_to_device(transformer_model, lm_device)
 transformer_model.eval()
 
 completed_steps = 0
+if_achieve_max_sampling_steps = False
+
 for epoch in range(config.max_train_epoch):
     update_dict({"epoch": epoch}, completed_steps)
 
@@ -323,6 +328,10 @@ for epoch in range(config.max_train_epoch):
                 seq_length = [x-1 for x in seq_length]
 
             completed_steps += 1
+            if config.max_sampling_steps is not None and completed_steps >= config.max_sampling_steps:
+                if_achieve_max_sampling_steps = True
+                logger.info("achieve max sampling steps")
+                break
             if completed_steps % 10 == 9:
                 dqn_loss = dqn.learn()
                 update_dict({"dqn_loss": dqn_loss}, step=completed_steps)
@@ -345,7 +354,9 @@ for epoch in range(config.max_train_epoch):
         done_rate = 1 - batch_size / batch_size_at_start
         update_dict({"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
         progress_bar.update(1)
+        if if_achieve_max_sampling_steps: break
 
+    if if_achieve_max_sampling_steps: break
 
 logger.info("Finish training!")
 if config.use_wandb:

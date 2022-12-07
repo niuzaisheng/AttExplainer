@@ -137,11 +137,10 @@ def get_rewards(original_seq_length=None,
     if config.task_type == "attack":
         if_success = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
         # post_rewards = torch.clip((post_loss - original_loss), 0) * unmasked_token_rate + 10 * if_success * unmasked_token_rate - game_step / config.max_game_steps
-        # post_rewards = 10 * if_success
         post_rewards = delta_prob + 10 * if_success * unmasked_token_rate
+        # post_rewards = 10 * if_success
         # post_rewards = delta_p
         # post_rewards = 10 * if_success * unmasked_token_rate
-        # post_rewards = torch.clip(delta_p, 0) + 10 * if_success * unmasked_token_rate
 
     elif config.task_type == "explain":
         if_success = (delta_prob >= config.done_threshold).float()

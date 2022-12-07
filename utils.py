@@ -197,7 +197,7 @@ def layer_forward_hook(module, hook_inputs, hook_outputs, embedding_saver):
 def keep_tensor_in_same_device(*args, device):
     return [arg.to(device) for arg in args]
 
-def get_gradient_features(transformer_model, post_batch, original_pred_labels):
+def get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=False):
 
     transformer_model.zero_grad()
     original_pred_labels = original_pred_labels.view(-1)
@@ -211,8 +211,8 @@ def get_gradient_features(transformer_model, post_batch, original_pred_labels):
         input_embedding = embedding_saver[0]
         label_logits = logits[torch.arange(logits.size(0), device=logits.device), original_pred_labels]
         grads = torch.autograd.grad(torch.unbind(label_logits), input_embedding)[0]  # [batch_size, seq_len, model_rep_dim]
-        grads = grads * input_embedding  # grad * input_embedding
-        # grads = grads  # only grad 
+        if times_input:
+            grads = grads * input_embedding  # grad * input_embedding
     return grads.detach(), model_outputs
 
 

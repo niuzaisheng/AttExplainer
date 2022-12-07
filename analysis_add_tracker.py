@@ -33,7 +33,7 @@ def parse_args():
     )
     parser.add_argument("--bins_num", type=int, default=32)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
-                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "original_embedding", "input_ids"],)
+                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "gradient_input", "original_embedding", "input_ids"])
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
@@ -146,7 +146,9 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, co
     features_type = config.features_type
     post_batch = send_to_device(post_batch, lm_device)
     if features_type == "gradient":
-        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels)
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=False)
+    elif features_type == "gradient_input":
+        extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=True)
     elif features_type == "original_embedding":
         extracted_features, post_outputs = use_original_embedding_as_features(transformer_model, post_batch)
     else:
