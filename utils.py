@@ -20,6 +20,7 @@ input_feature_shape_dict = {
     "random": 2,
     "effective_information": 1,
     "gradient": 2,
+    "gradient_input": 2,
     "original_embedding": 2,
     "input_ids": 1,
 }
@@ -668,3 +669,38 @@ def gather_unfinished_examples_with_tracker(if_done: Tensor,
     return len(left_index), left_trackers, left_seq_length, \
         left_original_seq_length, left_original_acc, left_original_pred_labels, left_original_prob, left_original_logits, left_original_loss, \
         left_special_tokens_mask, left_features, left_game_status, left_batch
+
+
+def get_permutation_mask_matrix(seq_length:int, special_tokens_mask: List[bool]=None):
+    num_special_tokens = 0
+    if special_tokens_mask is not None:
+        num_special_tokens = sum(special_tokens_mask)
+    valid_num = seq_length - num_special_tokens
+    valid_mask_matrix = np.zeros((2 ** valid_num, valid_num), dtype=np.int64)
+    for i in range(2 ** valid_num):
+        valid_mask_matrix[i] = [int(x) for x in list(bin(i)[2:].zfill(valid_num))]
+    if special_tokens_mask is not None:
+        mask_matrix = np.zeros((2 ** valid_num, seq_length), dtype=np.int64)
+        i = 0
+        for j, flag in enumerate(special_tokens_mask):
+            if flag:
+                mask_matrix[:, j] = 0
+            else:
+                mask_matrix[:, j] = valid_mask_matrix[:, i]
+                i += 1
+    else:
+        mask_matrix = valid_mask_matrix
+    return mask_matrix
+
+
+class StepTracker:
+    def __init__(self):
+        self.step = 0
+
+    def __add__(self, other):
+        self.step += other
+        return self.step
+
+    @property
+    def current_step(self):
+        return self.step

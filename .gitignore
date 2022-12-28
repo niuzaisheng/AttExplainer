@@ -12,6 +12,8 @@ Note.md
 data/du/*
 data/eraserbenchmark/*
 data/eraser_esnli/*
+data/AttackAssist*
+data/TProcess*
 test.sh
 test.py
 *.tar.gz
@@ -146,3 +148,4 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+steps.sh

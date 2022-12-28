@@ -3,24 +3,35 @@
 
 import os
 import sys
-sys.path.append(os.getcwd())
-import logging
-import argparse
 
+sys.path.append(os.getcwd())
+
+import argparse
 import datetime
-from data_utils import *
+import logging
+from typing import List
+
 import OpenAttack as oa
+from OpenAttack.metric import AttackMetric
+from OpenAttack.tags import TAG_English 
 from transformers import AutoTokenizer
+
+from data_utils import *
+
 logger = logging.getLogger(__name__)
 
+oa.DataManager.enable_cdn()
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Run attack baseline")
 
     parser.add_argument(
-        "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion, snli or sst2."
+        "--data_set_name", type=str, help="The name of the dataset. On of emotion, snli or sst2."
     )
-    parser.add_argument("--eval_test_batch_size", type=int, default=32)
+    parser.add_argument("--max_sample_num", type=int, default=100)
+    
+    args = parser.parse_args()
+    return args
 
 config = parse_args()
 
@@ -43,8 +54,9 @@ token_quantity_correction = dataset_config["token_quantity_correction"]
 tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
 
 logger.info("Start loading!")
-transformer_model, simulate_dataset, eval_dataset = get_dataset_and_model(config, dataset_config, tokenizer)
+transformer_model, _, eval_dataset = get_dataset_and_model(config, dataset_config, tokenizer)
 logger.info("Finish loading!")
+
 
 
 class NLIWrapper(oa.classifiers.Classifier):
@@ -55,16 +67,27 @@ class NLIWrapper(oa.classifiers.Classifier):
         return self.get_prob(input_).argmax(axis=1)
 
     def get_prob(self, input_):
-        ref = self.context.input["hypothesis"]
-        input_sents = [sent + "</s></s>" + ref for sent in input_]
-        return self.model.get_prob(
-            input_sents
-        )
+        # ref = self.context.input["hypothesis"]
+        # input_sents = [sent + "</s></s>" + ref for sent in input_]
+        return self.model.get_prob(input_)
+
 
 victim = oa.classifiers.TransformersClassifier(transformer_model, tokenizer, transformer_model.bert.embeddings.word_embeddings)
 if config.data_set_name == "snli":
     victim = NLIWrapper(victim)
-
+    def rename_column(example):
+        # cat premise and hypothesis
+        # ids = tokenizer.encode(example["premise"], example["hypothesis"], add_special_tokens=True)
+        # tokens = tokenizer.convert_ids_to_tokens(ids)
+        # example["x"] = " ".join(tokens)
+        example["x"] = "[CLS] " + example["premise"] + " [SEP] " + example["hypothesis"] + " [SEP]" 
+        return example
+    eval_dataset = eval_dataset.map(rename_column)
+else:
+    def rename_column(example):
+        example["x"] = example["text"]
+        return example
+    eval_dataset = eval_dataset.map(rename_column)
 
 attacker_list = [
     oa.attackers.PWWSAttacker(),
@@ -74,26 +97,72 @@ attacker_list = [
     oa.attackers.DeepWordBugAttacker(),
     oa.attackers.TextBuggerAttacker(),
     oa.attackers.PSOAttacker(),
-    oa.attackers.BERTAttacker(), 
+    oa.attackers.BERTAttacker(),
 ]
+
+class TokenModification(AttackMetric):
+    
+    NAME = "Token Modif. Rate"
+    removed_special_tokens = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"]
+
+    def __init__(self, tokenizer):
+        self.tokenizer = tokenizer
+
+    @property
+    def TAGS(self):
+        return { TAG_English }
+        
+    def calc_score(self, tokenA : List[str], tokenB : List[str]) -> float:
+        """
+        Args:
+            tokenA: The first list of tokens.
+            tokenB: The second list of tokens.
+        Returns:
+            Modification rate.
+
+        Make sure two list have the same length.
+        """
+        va = tokenA
+        vb = tokenB
+        ret = 0
+        if len(va) != len(vb):
+            ret = abs(len(va) - len(vb))
+        mn_len = min(len(va), len(vb))
+        va, vb = va[:mn_len], vb[:mn_len]
+        for wordA, wordB in zip(va, vb):
+            if wordA != wordB:
+                ret += 1
+        return ret / len(va)
+    
+    def after_attack(self, input, adversarial_sample):
+        if adversarial_sample is not None:
+            x = self.tokenizer.tokenize(input["x"])
+            y = self.tokenizer.tokenize(adversarial_sample)
+            # remove all special tokens
+            x = [t for t in x if t not in TokenModification.removed_special_tokens]
+            y = [t for t in y if t not in TokenModification.removed_special_tokens]
+            return self.calc_score(x, y)
+
 
 # prepare for attacking
 dt = datetime.datetime.now().strftime("%Y-%m-%d-%I-%M-%S")
 save_file_dir = f"logs/openattack_{config.data_set_name}_{dt}"
+print(f"The result will be saved in {save_file_dir}")
 
 f = open(save_file_dir, "w")
 # will wait for a long time
 for attacker in attacker_list:
 
     print(f"Start attack by {attacker.__class__.__name__}")
-    attack_eval = oa.AttackEval(attacker, victim, metrics=[
-        oa.metric.EditDistance(),
-        oa.metric.ModificationRate()
-    ])
-    try:
-        result = attack_eval.eval(simulate_dataset, visualize=False)
-    except:
-        print(f"some thing wrong! {attacker.__class__.__name__}")
+    attack_eval = oa.AttackEval(attacker, victim,
+                                metrics=[
+                                    oa.metric.EditDistance(),
+                                    oa.metric.ModificationRate(), # Word Modification Rate
+                                    TokenModification(tokenizer), # Token Modification Rate
+                                ],
+                                invoke_limit=config.max_sample_num)
+
+    result = attack_eval.eval(eval_dataset, visualize=False)
 
     print(result)
     f.writelines(str(attacker.__class__.__name__)+"\n")

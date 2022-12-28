@@ -153,7 +153,7 @@ class DQN(object):
         self.token_replacement_strategy = config.token_replacement_strategy
 
         ModelClass = None
-        if config.features_type == "gradient":
+        if config.features_type in ["gradient", "gradient_input"]:
             ModelClass = DQNNet4Grad
         elif config.features_type == "original_embedding":
             ModelClass = DQNNet2D

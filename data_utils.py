@@ -27,6 +27,7 @@ def get_token_word_position_map(batch, tokenizer):
         res.append(word_offset_map)
     return res
 
+
 def get_word_masked_rate(batch_game_status, seq_length, batch_word_offset_maps):
     assert len(batch_game_status) == len(seq_length) == len(batch_word_offset_maps)
     batch_word_masked_rate = []
@@ -42,13 +43,16 @@ def get_word_masked_rate(batch_game_status, seq_length, batch_word_offset_maps):
     return batch_word_masked_rate
 
 
-def single_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name="text", add_cls=True):
+def single_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name="text"):
 
     first = features[0]
     batch = {}
 
-    batch = tokenizer.batch_encode_plus([item[text_col_name] for item in features], add_special_tokens=add_cls,
-                                        truncation=True, padding=True, max_length=256, return_special_tokens_mask=True, return_tensors='pt')
+    batch = tokenizer.batch_encode_plus([item[text_col_name] for item in features],
+                                        add_special_tokens=True,
+                                        return_token_type_ids=True,
+                                        return_special_tokens_mask=True,
+                                        truncation=True, padding=True, max_length=256, return_tensors='pt')
 
     token_word_position_map = get_token_word_position_map(batch, tokenizer)
 
@@ -75,14 +79,15 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     return batch
 
 
-def double_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name1="text", text_col_name2="text", add_cls=True):
+def double_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name1="text1", text_col_name2="text2"):
     first = features[0]
     batch = {}
 
     batch = tokenizer.batch_encode_plus([(item[text_col_name1], item[text_col_name2]) for item in features],
-                                        add_special_tokens=add_cls,
+                                        add_special_tokens=True,
                                         return_token_type_ids=True,
-                                        return_special_tokens_mask=True, truncation=True, padding=True, max_length=256, return_tensors='pt')
+                                        return_special_tokens_mask=True,
+                                        truncation=True, padding=True, max_length=256, return_tensors='pt')
     token_word_position_map = get_token_word_position_map(batch, tokenizer)
 
     if problem_type == "single_label_classification":
@@ -103,11 +108,11 @@ def double_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     batch["special_tokens_mask"] = batch["special_tokens_mask"].bool()
     if "id" in first.keys():
         batch["id"] = [item["id"] for item in features]
-        
+
     return batch
 
 
-### For processing eraser_esnli dataset
+# For processing eraser_esnli dataset
 
 def get_tokenized_sentence(word_list, tokenizer):
     word2token_map = {}  # word id -> token span
@@ -149,7 +154,7 @@ def concat_two_sentences(tokenized_text1, tokenized_text2,
         end_token_id = concated_word2token_map[1, evidence_span[1]-1][1]
         concated_evidence_token_span.append((start_token_id, end_token_id))
 
-    evidence_token_mask = [] # evidence token is 1, others are 0
+    evidence_token_mask = []  # evidence token is 1, others are 0
     for i in range(len(concated_tokenized_text)):
         if any([start_token_id <= i < end_token_id for start_token_id, end_token_id in concated_evidence_token_span]):
             evidence_token_mask.append(1)
@@ -198,19 +203,19 @@ def esnli_double_sentence_data_collator(features, tokenizer):
             batch[key] = [example[key] for example in features]
         elif key in ["input_ids", "token_type_ids", "special_tokens_mask", "attention_mask", "evidence_token_mask"]:
             batch[key] = pad_sequence([torch.tensor(example[key], dtype=torch.long) for example in features], batch_first=True)
-        if key=="label":
+        if key == "label":
             batch["labels"] = torch.tensor([example[key] for example in features], dtype=torch.long).unsqueeze(-1)
     batch["token_word_position_map"] = get_token_word_position_map(batch, tokenizer)
     return batch
 
-### END For processing eraser_esnli dataset
+# END For processing eraser_esnli dataset
 
-### For processing eraser_cose dataset
+# For processing eraser_cose dataset
+
+
 def cose_example_map(example, tokenizer, label_names):
     # TODO Add new dataset
     doc_id = example["doc_id"]
-
-
 
 
 def get_dataset_config(config):
@@ -254,7 +259,7 @@ def get_dataset_config(config):
 
     elif config.data_set_name == "cose":
         model_name_or_path = "bert-base-uncased"
-        label_names = ["A", "B" ,"C", "D", "E"]
+        label_names = ["A", "B", "C", "D", "E"]
         problem_type = "single_label_classification"
         text_col_num = 2
         text_col_name = ["question", "query"]
@@ -280,9 +285,10 @@ def get_dataset_config(config):
     }
 
 
-def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_dataloader=True):
+def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_dataloader=True, return_eval_dataloader=True):
 
     simulate_dataloader = None
+    eval_dataloader = None
     model_name_or_path = dataset_config["model_name_or_path"]
     label_names = dataset_config["label_names"]
     num_labels = dataset_config["num_labels"]
@@ -297,14 +303,15 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
             example["id"] = hash(example["text"])
             example["label"] = label_names.index(example["label_name"])
             return example
-            
+
         dataset = dataset.map(add_id_and_label)
         train_dataset = dataset["train"]
         eval_dataset = dataset["eval"]
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
         if return_simulate_dataloader:
             simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+        if return_eval_dataloader:
+            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         from transformers import BertModelWithHeads
         teacher_model = BertModelWithHeads.from_pretrained("bert-base-uncased")
@@ -316,7 +323,7 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         label_dict = {0: 1, 1: 2, 2: 0}
 
         def add_id_and_fix_label(example):
-            example["id"] = hash(example["premise"]+ example["hypothesis"])
+            example["id"] = hash(example["premise"] + example["hypothesis"])
             example["label"] = label_dict[example["label"]]
             return example
         dataset = dataset.filter(lambda example: example['label'] != -1).map(add_id_and_fix_label)
@@ -326,7 +333,8 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         data_collator = partial(double_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name1=text_col_name[0], text_col_name2=text_col_name[1])
         if return_simulate_dataloader:
             simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+        if return_eval_dataloader:
+            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
@@ -345,7 +353,8 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         data_collator = partial(esnli_double_sentence_data_collator, tokenizer=tokenizer)
         if return_simulate_dataloader:
             simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+        if return_eval_dataloader:
+            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
@@ -358,7 +367,8 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
         if return_simulate_dataloader:
             simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+        if return_eval_dataloader:
+            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
@@ -376,23 +386,23 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
     return teacher_model, simulate_dataloader, eval_dataloader
 
 
-def get_dataset_and_model(config, dataset_config, tokenizer, return_simulate_dataloader=True):
+def get_dataset_and_model(config, dataset_config, tokenizer):
 
-    simulate_dataloader = None
+    train_dataset = None
+    eval_dataset = None
     model_name_or_path = dataset_config["model_name_or_path"]
     label_names = dataset_config["label_names"]
     num_labels = dataset_config["num_labels"]
-    problem_type = dataset_config["problem_type"]
-    text_col_num = dataset_config["text_col_num"]
-    text_col_name = dataset_config["text_col_name"]
 
     if config.data_set_name in ["emotion"]:
         dataset = load_dataset('csv', data_files={'train': 'data/emotion/test.txt', 'eval': 'data/emotion/val.txt', 'test': 'data/emotion/test.txt'}, delimiter=";")
 
-        def add_label(example):
+        def add_id_and_label(example):
+            example["id"] = hash(example["text"])
             example["label"] = label_names.index(example["label_name"])
-            return {"text": example["text"], "label": example["label"]}
-        dataset = dataset.map(add_label)
+            return example
+
+        dataset = dataset.map(add_id_and_label)
         train_dataset = dataset["train"]
         eval_dataset = dataset["eval"]
 
@@ -405,22 +415,46 @@ def get_dataset_and_model(config, dataset_config, tokenizer, return_simulate_dat
         dataset = load_dataset(config.data_set_name)
         label_dict = {0: 1, 1: 2, 2: 0}
 
+        def add_id_and_fix_label(example):
+            example["id"] = hash(example["premise"] + example["hypothesis"])
+            example["label"] = label_dict[example["label"]]
+            return example
+        dataset = dataset.filter(lambda example: example['label'] != -1).map(add_id_and_fix_label)
+        train_dataset = dataset["train"]
+        eval_dataset = dataset["validation"]
+
+        teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
+
+    elif config.data_set_name in ["esnli"]:
+        dataset = load_dataset("niurl/eraser_esnli")
+        label_dict = {0: 1, 1: 2, 2: 0}
+
         def fix_label(example):
             example["label"] = label_dict[example["label"]]
             return example
-        dataset = dataset.filter(lambda example: example['label'] != -1).map(fix_label)
+
+        dataset = dataset.map(partial(esnli_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16).map(fix_label, num_proc=16)
         train_dataset = dataset["train"]
-        eval_dataset = dataset["validation"]
+        eval_dataset = dataset["val"]
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
     elif config.data_set_name in ["sst2"]:
         dataset = load_dataset("glue", config.data_set_name)
-        dataset = dataset.remove_columns(["idx"])
+        dataset = dataset.rename_column("idx", "id")
         train_dataset = dataset["train"]
         eval_dataset = dataset["validation"]
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
+
+    elif config.data_set_name in ["cose"]:
+        dataset = load_dataset("niurl/eraser_cose")
+        dataset = dataset.map(partial(cose_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16)
+
+        from transformers import BertModelWithHeads
+        teacher_model = BertModelWithHeads.from_pretrained("bert-base-uncased")
+        adapter_name = teacher_model.load_adapter(config.adapter_name, source="hf")
+        teacher_model.set_active_adapters(adapter_name)
 
     assert teacher_model.config.num_labels == num_labels
 

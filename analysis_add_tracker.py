@@ -103,6 +103,7 @@ def get_rewards(original_seq_length=None,
     masked_token_num = original_seq_length - unmask_token_num
     masked_token_rate = 1 - unmasked_token_rate
     delta_prob = (original_prob - post_prob)
+    delta_logits = None
     if original_logits is not None and post_logits is not None:
         delta_logits = (original_logits - post_logits)
     delta_loss = None

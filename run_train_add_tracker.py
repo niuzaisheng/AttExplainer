@@ -151,17 +151,17 @@ def get_rewards(original_seq_length=None,
 
     if config.task_type == "attack":
         if_success = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
-        # rewards = torch.clip((post_loss - original_loss), 0) * unmasked_token_rate + 10 * if_success * unmasked_token_rate - game_step / config.max_game_steps
-        # rewards = 10 * if_success
-        rewards = delta_prob + 10 * if_success * unmasked_token_rate
-        # rewards = delta_p
-        # rewards = 10 * if_success * unmasked_token_rate
-        # rewards = torch.clip(delta_prob 0) + 10 * if_success * unmasked_token_rate
+        # rewards = delta_prob + 10 * if_success * unmasked_token_rate
+        # rewards = delta_prob + 10 * if_success # ablation study
+        # rewards = 10 * if_success * unmasked_token_rate # ablation study
+        rewards = delta_prob # ablation study
 
     elif config.task_type == "explain":
         if_success = (delta_prob >= config.done_threshold).float()
-        rewards = delta_prob + 10 * if_success * unmasked_token_rate
-        # rewards = delta_p
+        rewards = delta_prob + 10 * if_success * unmasked_token_rate # default reward setting
+        # rewards = delta_prob + 10 * if_success # ablation study
+        # rewards = 10 * if_success * unmasked_token_rate # ablation study
+        # rewards = delta_prob # ablation study
 
     if_done = if_success.clone()  # die or win == 1
     for i in range(unmask_token_num.size(0)):
