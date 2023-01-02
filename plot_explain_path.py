@@ -40,7 +40,7 @@ def parse_args():
 
     parser.add_argument("--input_text", type=str)
     parser.add_argument(
-        "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
+        "--data_set_name", type=str, default="emotion", help="The name of the dataset. On of emotion,snli or sst2."
     )
     parser.add_argument("--bins_num", type=int, default=32)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
@@ -195,8 +195,95 @@ golden_labels = torch.tensor([1], dtype=torch.long)
 original_acc, original_pred_labels, original_prob = batch_initial_prob(original_outputs, golden_labels, device="cpu")
 print(f"original_pred_label is {label_names[original_pred_labels.item()]}, original_prob is {original_prob.item()}")
 
+# Step 2: Obtain explain path by ddqn agent
+epoch_game_steps = config.max_game_steps
+game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps)
 
-# Step 2: Construct permutation samples and get all samples' output representation
+# track the modified tokens
+left_index = [i for i in range(batch_max_seq_length)]
+modified_index_order = []
+modified_sample_prob = [original_prob.item(),]
+explain_path = [batch["input_ids"], ] # the start of the path is original input_ids
+
+# initial batch
+original_seq_length = [batch_max_seq_length, ]
+seq_length = [batch_max_seq_length, ]
+
+actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
+now_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, batch, seq_length, config,
+                                                                                       lm_device=lm_device, dqn_device=dqn.device)
+
+is_success = False
+for game_step in range(epoch_game_steps):
+    game_step_progress_bar.update()
+
+    post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
+    next_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config,
+                                                                                            lm_device=lm_device, dqn_device=dqn.device)
+    explain_path.append(post_batch["input_ids"]) # add the new input_ids to the path
+    action = actions.item()
+    modified_sample_prob.append(post_prob.item())
+    if config.token_replacement_strategy == "delete":
+        # in delete mode, delete index from origional_index and add to modified_index_order
+        origional_index = left_index[action]
+        modified_index_order.append(origional_index)
+        left_index.remove(origional_index)
+
+    elif config.token_replacement_strategy == "mask":
+        # in mask mode, add index to modified_index_order
+        origional_index = left_index[action]
+        modified_index_order.append(origional_index)
+    else:
+        raise ValueError("token_replacement_strategy should be delete or mask")
+
+    r = get_rewards(original_seq_length,
+                    original_acc=original_acc, original_prob=original_prob, original_logits=None, original_loss=None,
+                    post_acc=post_acc, post_prob=post_prob, post_logits=None, post_loss=None,
+                    game_status=next_game_status, game_step=game_step)
+
+    if r.if_done[0].item() == 1:
+        is_success = True
+        print(f"Success in {game_step} steps")
+        break
+
+    now_features, now_game_status, batch = next_features, next_game_status, post_batch
+
+    if config.token_replacement_strategy == "delete":
+        seq_length = [x-1 for x in seq_length]
+
+if not is_success:
+    print(f"Not success in { epoch_game_steps } steps.")
+
+explain_path_len = len(explain_path)
+explain_path = [send_to_device(x, "cpu") for x in explain_path]
+explain_path = torch.cat(explain_path, dim=0)
+# convert ids to string by tokenizer
+explain_path_string = tokenizer.batch_decode(explain_path, skip_special_tokens=False)
+print("explain_path_string:")
+for item, prob in zip(explain_path_string, modified_sample_prob):
+    print(item, prob)
+
+print("modified_index_order:", modified_index_order)
+print("modified_sample_prob:", modified_sample_prob)
+
+assert len(modified_index_order) + 1 == len(modified_sample_prob)
+token_saliency = defaultdict(float)
+last_prob = original_prob.item()
+for token_index, prob in zip(modified_index_order, modified_sample_prob[1:]):
+    token_saliency[token_index] = last_prob - prob
+    last_prob = prob
+
+print("token_saliency:")
+for token_index, saliency in token_saliency.items():
+    print(token_index, saliency)
+
+token_saliency_list = [token_saliency[i] for i in range(batch_max_seq_length)]
+token_saliency_list = torch.tensor(token_saliency_list, dtype=torch.float32)
+
+
+
+# %%
+# Step 3: Construct permutation samples and get all samples' output representation
 permutation_mask = get_permutation_mask_matrix(batch_max_seq_length, special_tokens_mask.tolist())
 permutation_mask = torch.tensor(permutation_mask, dtype=torch.bool)
 
@@ -239,85 +326,18 @@ for _ in tqdm(range(all_epoch)):
 
 all_output_reprs = torch.cat(all_output_reprs, dim=0).numpy()
 all_label_probs = torch.cat(all_label_probs, dim=0).numpy()
-
 all_permutation_examples = all_permutation_examples.numpy()
-# # save output_reprs and labels
-np.savez(f"{exp_name}.npz",
-         all_permutation_examples=all_permutation_examples,
-         all_output_reprs=all_output_reprs, 
-         all_label_probs=all_label_probs)
 
+# # if need, save output_reprs and labels
+# np.savez(f"logs/{exp_name}.npz",
+#          all_permutation_examples=all_permutation_examples,
+#          all_output_reprs=all_output_reprs, 
+#          all_label_probs=all_label_probs)
 
-# %%
-# if need, reload output_reprs and labels
-# data = np.load(f"{exp_name}.npz")
+# # if need, reload output_reprs and labels
+# data = np.load(f"logs/{exp_name}.npz")
 # all_output_reprs = data["all_output_reprs"]
 # all_label_probs = data["all_label_probs"]
-
-# Step 3: Obtain explain path by ddqn agent
-epoch_game_steps = config.max_game_steps
-game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps)
-
-# track the modified tokens
-left_index = [i for i in range(batch_max_seq_length)]
-modified_index_order = []
-modified_sample_prob = []
-
-# initial batch
-original_seq_length = [batch_max_seq_length, ]
-seq_length = [batch_max_seq_length, ]
-
-actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
-now_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, batch, seq_length, config,
-                                                                                       lm_device=lm_device, dqn_device=dqn.device)
-explain_path = [batch["input_ids"], ] # the start of the path is original input_ids
-is_success = False
-for game_step in range(epoch_game_steps):
-    game_step_progress_bar.update()
-
-    post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
-    next_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config,
-                                                                                            lm_device=lm_device, dqn_device=dqn.device)
-    explain_path.append(post_batch["input_ids"]) # add the new input_ids to the path
-
-    action = actions.item()
-    modified_sample_prob.append(post_prob.item())
-    if config.token_replacement_strategy == "delete":
-        # in delete mode, delete index from origional_index and add to modified_index_order
-        origional_index = left_index[action]
-        modified_index_order.append(origional_index)
-        left_index.remove(origional_index)
-
-    elif config.token_replacement_strategy == "mask":
-        # in mask mode, add index to modified_index_order
-        origional_index = left_index[action]
-        modified_index_order.append(origional_index)
-    else:
-        raise ValueError("token_replacement_strategy should be delete or mask")
-
-    r = get_rewards(original_seq_length,
-                    original_acc=original_acc, original_prob=original_prob, original_logits=None, original_loss=None,
-                    post_acc=post_acc, post_prob=post_prob, post_logits=None, post_loss=None,
-                    game_status=next_game_status, game_step=game_step)
-
-    if r.if_done[0].item() == 1:
-        is_success = True
-        print(f"Success in {game_step} steps")
-        break
-
-    now_features, now_game_status, batch = next_features, next_game_status, post_batch
-
-    if config.token_replacement_strategy == "delete":
-        seq_length = [x-1 for x in seq_length]
-
-if not is_success:
-    print(f"Not success in { epoch_game_steps } steps.")
-
-explain_path_len = len(explain_path)
-explain_path = torch.cat(explain_path, dim=0).cpu()
-# convert ids to string by tokenizer
-explain_path_string = tokenizer.batch_decode(explain_path, skip_special_tokens=False)
-print("explain_path_string:", explain_path_string)
 
 explain_path = explain_path.numpy()
 explain_path_index = []
@@ -325,6 +345,8 @@ for i in range(explain_path_len):
     tmp = np.where((all_permutation_examples == explain_path[i]).all(axis=1))
     explain_path_index.append(tmp[0][0])
 print("explain_path_index:", explain_path_index)
+
+# %%
 
 # sample some examples form all_permutation_examples，make sure all token in explain_path are included
 sample_num = 1000
@@ -345,7 +367,7 @@ tsne = TSNE(n_components=2, init='pca', perplexity=20, random_state=0)
 X_tsne = tsne.fit_transform(sample_output_reprs)
 
 # save t-SNE result
-np.savez(f"{exp_name}_tsne.npz", X_tsne=X_tsne, sample_label_probs=sample_label_probs, sample_explain_path_index=sample_explain_path_index)
+np.savez(f"logs/{exp_name}_tsne.npz", X_tsne=X_tsne, sample_label_probs=sample_label_probs, sample_explain_path_index=sample_explain_path_index)
 
 # reload t-SNE result
 data = np.load(f"{exp_name}_tsne.npz")
@@ -370,7 +392,7 @@ for i in range(len(explain_path_index)-1):
               width=0.5, head_width=2,
               length_includes_head=True, fc='r', ec='r', alpha=0.7)
 
-plt.savefig(f"{exp_name}.svg")
+plt.savefig(f"logs/{exp_name}.svg")
 # plt.show()
 
 
@@ -405,8 +427,8 @@ plt.gca().invert_yaxis()
 
 plt.xlim(-0.15, 0.75)
 plt.axvline(x=0, color='k', linestyle='--')
-plt.savefig(f"{exp_name}_saliency.svg")
-plt.savefig(f"{exp_name}_saliency.png")
+plt.savefig(f"logs/{exp_name}_saliency.svg")
+plt.savefig(f"logs/{exp_name}_saliency.png")
 # plt.show()
 
 print("done")

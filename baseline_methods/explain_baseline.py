@@ -16,6 +16,7 @@ from typing import Dict, List
 
 import numpy as np
 import torch
+from torch import Tensor
 from accelerate.utils import send_to_device
 from captum.attr import (FeatureAblation, KernelShap, LayerDeepLift,
                          LayerIntegratedGradients, Occlusion,
@@ -28,6 +29,7 @@ from data_utils import get_dataset_and_model, get_dataset_config
 from utils import StepTracker
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def parse_args():
@@ -48,7 +50,6 @@ def parse_args():
 
     args = parser.parse_args()
     return args
-
 
 config = parse_args()
 # Setup logging
@@ -97,6 +98,7 @@ all_musked_word_rate = []
 all_unmusked_token_rate = []
 all_done_game_step = []  # Average Victim Model Query Times
 all_fidelity = []
+all_fidelity_auc = []
 all_delta_prob = []
 
 all_game_step_done_num = defaultdict(list)  # success rate in each game_step
@@ -116,10 +118,10 @@ def predict(input_ids, token_type_ids=None, attention_mask=None, step_tracker=No
     if step_tracker:
         step_tracker += input_ids.size(0)
     if need_grad:
-        output = transformer_model(input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+        output = transformer_model(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
     else:
         with torch.no_grad():
-            output = transformer_model(input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+            output = transformer_model(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
     return output.logits
 
 def batch_predict(example_list, token_type_ids=None, attention_mask=None, input_special_token_ids=None, step_tracker=None):
@@ -174,6 +176,48 @@ elif config.explain_method == "IntegratedGradients":
 elif config.explain_method == "DeepLift":
     lig = LayerDeepLift(transformer_model, transformer_model.bert.embeddings)
 
+
+thresholds = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+
+def compute_fidelity_auc(valid_token_num:List[int], input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
+    token_saliency:List[List[float]], original_pred_labels, lm_device, mask_token_id=103):
+    """
+    The sentences are masked sequentially by the order sort of token_saliency.
+    The auc curve :
+        x is each threshold
+        y is the fidelity value of each threshold, the fidelity value is acc compare to original_pred_labels
+    """
+
+    res = [] # nested list, each element is a list of fidelity for each threshold
+    batch_size = input_ids.size(0)
+    token_saliency = np.array(token_saliency)
+    token_saliency[special_tokens_mask] = -np.inf # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
+    sorted_saliency = np.argsort(token_saliency, axis=1)[:, ::-1]
+    sorted_saliency = np.ascontiguousarray(sorted_saliency)
+    original_pred_labels = torch.tensor(original_pred_labels, dtype=torch.long).reshape(-1, 1)
+
+    for threshold in thresholds:
+        num_mask_tokens = [int(seq_length * (1.0 - threshold)) for seq_length in valid_token_num]
+        need_to_be_masked = []
+        masked_input_ids = input_ids.clone()
+        mask_map = torch.zeros_like(masked_input_ids)
+        for i in range(batch_size):
+            need_to_be_masked.append(sorted_saliency[:num_mask_tokens[i]])
+            mask_map[i, need_to_be_masked[i]] = 1
+        mask_map.masked_fill_(special_tokens_mask, 0)
+        masked_input_ids.masked_fill_(mask_map, mask_token_id)
+        masked_input_ids = send_to_device(masked_input_ids, lm_device)
+        token_type_ids = send_to_device(token_type_ids, lm_device)
+        attention_mask = send_to_device(attention_mask, lm_device)
+        with torch.no_grad():
+            outputs = transformer_model(input_ids=masked_input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+            pred_probs = torch.softmax(outputs.logits, dim=-1).detach().cpu()
+            pred_probs = torch.gather(pred_probs, 1, original_pred_labels).reshape(-1).numpy() 
+        res.append(pred_probs)
+    res = np.array(res)
+    return res # [num_threshold, num_examples]
+
+
 for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_tqdm):
 
     example_id = item["id"]
@@ -186,6 +230,7 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
         encode = tokenizer.encode_plus([item[text_col_name[0]], item[text_col_name[1]]],
                                        return_tensors='pt', return_token_type_ids=True, return_attention_mask=True, return_special_tokens_mask=True)
     input_ids = encode.input_ids
+    seq_length = input_ids.size(1)
     token_type_ids = encode.token_type_ids
     attention_mask = encode.attention_mask
     special_tokens_mask = encode.special_tokens_mask.bool()
@@ -240,7 +285,6 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
         lime_batch_predict = partial(batch_predict, token_type_ids=token_type_ids, attention_mask=attention_mask, input_special_token_ids=input_special_token_ids, step_tracker=step_tracker)
         exp = lig.explain_instance(valid_input_ids, lime_batch_predict, num_samples=config.max_sample_num, num_features=valid_token_num, labels=(original_pred_label,))
         exp = exp.as_map()
-
         summarize_res = torch.zeros(input_ids.size())
         for token_id, weight in exp[original_pred_label]:
             summarize_res[0, valid_ids_map[token_id]] = weight
@@ -253,6 +297,7 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
                                       additional_forward_args=(token_type_ids, attention_mask, step_tracker, True))
         summarize_res = summarize_res.sum(dim=-1)
         summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
+        summarize_res = summarize_res.detach().cpu()
 
     elif config.explain_method == "DeepLift":
         
@@ -263,16 +308,17 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
 
         forward_handle = transformer_model.register_forward_hook(partial(step_tracker_hook, step_tracker=step_tracker))
 
-        summarize_res = lig.attribute(inputs=input_ids,
-                                      baselines=ref_input_ids,
+        summarize_res = lig.attribute(inputs=send_to_device(input_ids, device),
+                                      baselines=send_to_device(ref_input_ids, device),
                                       target=original_pred_label,
-                                      additional_forward_args=(attention_mask, token_type_ids))
+                                      additional_forward_args=(send_to_device(attention_mask, device), send_to_device(token_type_ids, device)))
 
         # unregister hook
         forward_handle.remove()
 
         summarize_res = summarize_res.sum(dim=-1)
         summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
+        summarize_res = summarize_res.detach().cpu()
 
     else:
         raise NotImplementedError
@@ -280,6 +326,9 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
     # size of summarize_res is [1, seq_len]
     mask_result = summarize_res > 0
     token_saliency = summarize_res[0].detach().tolist()
+
+    all_fidelity_auc.append(compute_fidelity_auc([valid_token_num, ], input_ids, token_type_ids, attention_mask, special_tokens_mask,
+                                                [token_saliency, ], [original_pred_label, ], device))
 
     post_input_ids = input_ids.clone()
     mask_result.masked_fill_(special_tokens_mask, False)
@@ -328,6 +377,14 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
                                     post_pred_label_name, post_pred_prob, delta_prob, mask_rate, musk_token_num,
                                     original_input_ids_text, post_input_ids_text, token_saliency)
 
+from sklearn.metrics import auc
+all_fidelity_auc = np.concatenate(all_fidelity_auc, axis=1) # [num_threshold, num_examples]
+x = np.array(thresholds) # [num_threshold, ]
+# repeat x to [num_threshold, num_examples]
+x = np.repeat(x[:, np.newaxis], all_fidelity_auc.shape[1], axis=1)
+x = x.flatten()
+all_fidelity_auc = all_fidelity_auc.flatten()
+auc_score = auc(x, all_fidelity_auc)
 
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num
@@ -336,6 +393,7 @@ reslut["Token Modification Rate"] = np.mean(all_musked_word_rate)
 reslut["Token Left Rate"] = np.mean(all_unmusked_token_rate)
 reslut["Average Model Query Times"] = np.mean(all_done_game_step)
 reslut["Fidelity"] = np.mean(all_fidelity)
+reslut["Fidelity AUC"] = auc_score
 reslut["delta_prob"] = np.mean(all_delta_prob)
 
 logger.info(f"Result")

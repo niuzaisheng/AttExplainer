@@ -1,5 +1,6 @@
 from typing import Dict, List, NamedTuple
 from collections import defaultdict
+import logging
 
 import numpy as np
 import torch
@@ -11,6 +12,8 @@ from torch import Tensor
 from functools import partial
 from ei_net import modify_effective_information
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # Different feature extraction methods will get feature matrices of different dimensions
 # For DQN gather single step data into batch from replay buffer
@@ -302,6 +305,71 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
+
+fidelity_auc_thresholds = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
+def compute_fidelity_threshold_acc(transformer_model, finished_index, valid_token_num:List[int], original_batch, special_tokens_mask: Tensor,
+    token_saliency:List[List[float]], original_pred_labels, lm_device, mask_token_id=103):
+    """
+    The sentences are masked sequentially by the order sort of token_saliency.
+    Only collection finished_index in the whole batch.
+    The auc curve :
+        x is each threshold
+        y is the fidelity value of each threshold, the fidelity value is acc compare to original_pred_labels
+    """
+
+    res = [] # nested list, each element is a list of fidelity for each threshold
+    finished_batch_size = len(finished_index)
+    _, max_seq_length = original_batch["input_ids"].size()
+
+    token_saliency_map = torch.zeros((finished_batch_size, max_seq_length))
+    for i, j in enumerate(finished_index):
+        token_saliency_list = token_saliency[j]        
+        token_saliency_map[i, :len(token_saliency_list)] = torch.tensor(token_saliency_list)
+
+    special_tokens_mask = special_tokens_mask[finished_index].contiguous()
+    token_saliency_map.masked_fill_(special_tokens_mask, -np.inf) # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
+    sorted_saliency = torch.argsort(token_saliency_map, dim=1, descending=True)
+
+    original_input_ids = original_batch["input_ids"][finished_index].contiguous()
+    token_type_ids = send_to_device(original_batch["token_type_ids"][finished_index].contiguous(), lm_device)
+    attention_mask = send_to_device(original_batch["attention_mask"][finished_index].contiguous(), lm_device)
+
+    original_pred_labels = original_pred_labels[finished_index]
+
+    for threshold in fidelity_auc_thresholds:
+        num_mask_tokens = []
+        for j in finished_index:
+            num_mask_tokens.append(int(valid_token_num[j] * (1.0 - threshold)))
+
+        masked_input_ids = original_input_ids.clone()
+        mask_map = torch.zeros((finished_batch_size, max_seq_length), dtype=torch.bool)
+        for i, (num_mask_token, sorted_saliency_list) in enumerate(zip(num_mask_tokens, sorted_saliency)):
+            mask_map[i, sorted_saliency_list[:num_mask_token]] = True
+        mask_map.masked_fill_(special_tokens_mask, False)
+        masked_input_ids.masked_fill_(mask_map, mask_token_id)
+        masked_input_ids = send_to_device(masked_input_ids, lm_device)
+
+        with torch.no_grad():
+            outputs = transformer_model(input_ids=masked_input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+            pred_probs = torch.softmax(outputs.logits, dim=-1).detach()
+            pred_probs = torch.gather(pred_probs, 1, original_pred_labels).reshape(-1).cpu().numpy() 
+        res.append(pred_probs)
+    res = np.array(res)
+    return res # [num_threshold, num_examples]
+
+
+def compute_fidelity_auc(all_threshold_acc: np.array):
+    """
+    all_threshold_acc: np.array with size of [num_threshold, num_examples]
+    """
+    from sklearn.metrics import auc
+    x = np.array(fidelity_auc_thresholds) # [num_threshold, ]
+    # repeat x to [num_threshold, num_examples]
+    x = np.repeat(x[:, np.newaxis], all_threshold_acc.shape[1], axis=1)
+    auc_score = auc(x.flatten(), all_threshold_acc.flatten())
+    return auc_score
+
+
 def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
                                  game_status, original_pred_labels, lm_device, mask_token_id=103):
 
@@ -508,8 +576,15 @@ class TokenModifyTracker:
         # auto track done step
         self.done_step = None
         self.fidelity = None
+        self.threshold_acc = None
         self.post_input_ids = None
         self.post_pred_label = None
+
+    @property
+    def valid_token_num(self):
+        if self.token_quantity_correction == 0:
+            logger.warning("Token quantity correction is 0, this may be wrong.")
+        return self.original_seq_length - self.token_quantity_correction
 
     def update(self,
                action: int,

@@ -17,6 +17,7 @@ from dqn_model import DQN
 from utils import *
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 set_seed(43)
 
@@ -90,6 +91,7 @@ logger.info("Start loading!")
 transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_model(config, dataset_config, tokenizer)
 logger.info("Finish loading!")
 
+
 def get_rewards(original_seq_length=None,
                 original_acc=None, original_prob=None, original_logits=None, original_loss=None,
                 post_acc=None, post_prob=None, post_logits=None, post_loss=None,
@@ -125,7 +127,7 @@ def get_rewards(original_seq_length=None,
     if_done = if_success.clone()  # die or win == 1
     for i in range(unmask_token_num.size(0)):
         # mask all tokens in one example will be treated as done
-        if unmask_token_num[i] == 0 :
+        if unmask_token_num[i] == 0:
             if_done[i] = 1
 
     return GameEnvironmentVariables(
@@ -177,18 +179,26 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, co
     return now_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss
 
 
-def record_results(transformer_model, trackers, finished_index, post_batch,
+def record_results(transformer_model, trackers, finished_index, original_batch, post_batch,
                    special_tokens_mask, game_status, original_pred_labels, lm_device):
     if config.token_replacement_strategy == "mask":
         fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, finished_index, post_batch,
                                                        special_tokens_mask, game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
+
     elif config.token_replacement_strategy == "delete":
         fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
                                                      special_tokens_mask, game_status, original_pred_labels, lm_device)
 
+    valid_token_num = [tracker.valid_token_num for tracker in trackers]
+    token_saliency = [tracker.token_saliency for tracker in trackers]
+    batch_threshold_acc = compute_fidelity_threshold_acc(transformer_model, finished_index, valid_token_num, original_batch, special_tokens_mask,
+                                               token_saliency, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID) # [num_threshold, num_examples]
+    batch_threshold_acc = batch_threshold_acc.T
+
     for i, batch_index in enumerate(finished_index):
         trackers[batch_index].fidelity = fidelity_acc[i].item()
         trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
+        trackers[batch_index].threshold_acc = batch_threshold_acc[i]
         if config.use_wandb:
             trackers[batch_index].save_result_row(tokenizer, label_names, wandb_result_table)
 
@@ -217,6 +227,7 @@ for step, batch in enumerate(eval_dataloader):
     special_tokens_mask = send_to_device(special_tokens_mask, dqn.device)
     token_word_position_map = batch.pop("token_word_position_map")
 
+    original_batch = clone_batch(batch)
     batch = send_to_device(batch, lm_device)
     # empty_batch = get_empty_batch(batch, special_tokens_mask, mask_token_id=MASK_TOKEN_ID)
 
@@ -259,7 +270,8 @@ for step, batch in enumerate(eval_dataloader):
 
         success_index = [i for i in range(batch_size) if r.if_done[i].item() == 1]
         if len(success_index) != 0:
-            record_results(transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
+            record_results(transformer_model, trackers, success_index, original_batch, post_batch,
+                           next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
         # Remove those completed samples and parpare for next game step
         batch_size, trackers, seq_length, original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss, special_tokens_mask, now_features, now_game_status, batch = \
@@ -276,7 +288,8 @@ for step, batch in enumerate(eval_dataloader):
         fail_index = [i for i in range(batch_size)]
         for i in fail_index:
             trackers[i].done_and_fail()
-        record_results(transformer_model, trackers, fail_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
+        record_results(transformer_model, trackers, fail_index, original_batch, post_batch, 
+                       next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
 logger.info("Finish eval!")
 logger.info("Saving results...")
@@ -291,6 +304,8 @@ reslut["Token Modification Number"] = np.mean([item.masked_token_num[-1] for ite
 # reslut["Word Left Rate"] = np.mean(all_unmasked_token_rate)
 reslut["Average Victim Model Query Times"] = np.mean([item.done_step for item in all_trackers])
 reslut["Fidelity"] = np.mean([item.fidelity for item in all_trackers])
+all_threshold_acc = np.array([item.threshold_acc for item in all_trackers]) # [num_examples, num_threshold]
+reslut["Fidelity AUC"] = compute_fidelity_auc(all_threshold_acc.T)
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
 
 logger.info(f"Result")

@@ -297,21 +297,22 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
     text_col_name = dataset_config["text_col_name"]
 
     if config.data_set_name in ["emotion"]:
-        dataset = load_dataset('csv', data_files={'train': 'data/emotion/test.txt', 'eval': 'data/emotion/val.txt', 'test': 'data/emotion/test.txt'}, delimiter=";")
 
         def add_id_and_label(example):
             example["id"] = hash(example["text"])
             example["label"] = label_names.index(example["label_name"])
             return example
 
-        dataset = dataset.map(add_id_and_label)
-        train_dataset = dataset["train"]
-        eval_dataset = dataset["eval"]
-        data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        if return_eval_dataloader:
-            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+        if return_simulate_dataloader or return_eval_dataloader:
+            dataset = load_dataset('csv', data_files={'train': 'data/emotion/test.txt', 'eval': 'data/emotion/val.txt', 'test': 'data/emotion/test.txt'}, delimiter=";")
+            dataset = dataset.map(add_id_and_label)
+            train_dataset = dataset["train"]
+            eval_dataset = dataset["eval"]
+            data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
+            if return_simulate_dataloader:
+                simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
+            if return_eval_dataloader:
+                eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         from transformers import BertModelWithHeads
         teacher_model = BertModelWithHeads.from_pretrained("bert-base-uncased")
@@ -319,62 +320,67 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         teacher_model.set_active_adapters(adapter_name)
 
     elif config.data_set_name in ["snli"]:
-        dataset = load_dataset(config.data_set_name)
-        label_dict = {0: 1, 1: 2, 2: 0}
+        if return_simulate_dataloader or return_eval_dataloader:
+            dataset = load_dataset(config.data_set_name)
+            label_dict = {0: 1, 1: 2, 2: 0}
 
-        def add_id_and_fix_label(example):
-            example["id"] = hash(example["premise"] + example["hypothesis"])
-            example["label"] = label_dict[example["label"]]
-            return example
-        dataset = dataset.filter(lambda example: example['label'] != -1).map(add_id_and_fix_label)
-        train_dataset = dataset["train"]
-        eval_dataset = dataset["validation"]
+            def add_id_and_fix_label(example):
+                example["id"] = hash(example["premise"] + example["hypothesis"])
+                example["label"] = label_dict[example["label"]]
+                return example
+            dataset = dataset.filter(lambda example: example['label'] != -1).map(add_id_and_fix_label)
+            train_dataset = dataset["train"]
+            eval_dataset = dataset["validation"]
 
-        data_collator = partial(double_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name1=text_col_name[0], text_col_name2=text_col_name[1])
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        if return_eval_dataloader:
-            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+            data_collator = partial(double_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name1=text_col_name[0], text_col_name2=text_col_name[1])
+            if return_simulate_dataloader:
+                simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
+            if return_eval_dataloader:
+                eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
     elif config.data_set_name in ["esnli"]:
-        dataset = load_dataset("niurl/eraser_esnli")
-        label_dict = {0: 1, 1: 2, 2: 0}
 
-        def fix_label(example):
-            example["label"] = label_dict[example["label"]]
-            return example
+        if return_simulate_dataloader or return_eval_dataloader:
+            dataset = load_dataset("niurl/eraser_esnli")
+            label_dict = {0: 1, 1: 2, 2: 0}
 
-        dataset = dataset.map(partial(esnli_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16).map(fix_label, num_proc=16)
-        train_dataset = dataset["train"]
-        eval_dataset = dataset["val"]
+            def fix_label(example):
+                example["label"] = label_dict[example["label"]]
+                return example
 
-        data_collator = partial(esnli_double_sentence_data_collator, tokenizer=tokenizer)
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        if return_eval_dataloader:
-            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+            dataset = dataset.map(partial(esnli_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16).map(fix_label, num_proc=16)
+            train_dataset = dataset["train"]
+            eval_dataset = dataset["val"]
+
+            data_collator = partial(esnli_double_sentence_data_collator, tokenizer=tokenizer)
+            if return_simulate_dataloader:
+                simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
+            if return_eval_dataloader:
+                eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
     elif config.data_set_name in ["sst2"]:
-        dataset = load_dataset("glue", config.data_set_name)
-        dataset = dataset.rename_column("idx", "id")
-        train_dataset = dataset["train"]
-        eval_dataset = dataset["validation"]
+        if return_simulate_dataloader or return_eval_dataloader:
+            dataset = load_dataset("glue", config.data_set_name)
+            dataset = dataset.rename_column("idx", "id")
+            train_dataset = dataset["train"]
+            eval_dataset = dataset["validation"]
 
-        data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
-        if return_simulate_dataloader:
-            simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
-        if return_eval_dataloader:
-            eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
+            data_collator = partial(single_sentence_data_collator, tokenizer=tokenizer, num_labels=num_labels, problem_type=problem_type, text_col_name=text_col_name)
+            if return_simulate_dataloader:
+                simulate_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=data_collator, batch_size=config.batch_size)
+            if return_eval_dataloader:
+                eval_dataloader = DataLoader(eval_dataset, collate_fn=data_collator, batch_size=config.eval_test_batch_size)
 
         teacher_model = MyBertForSequenceClassification.from_pretrained(model_name_or_path)
 
     elif config.data_set_name in ["cose"]:
-        dataset = load_dataset("niurl/eraser_cose")
-        dataset = dataset.map(partial(cose_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16)
+        if return_simulate_dataloader or return_eval_dataloader:
+            dataset = load_dataset("niurl/eraser_cose")
+            dataset = dataset.map(partial(cose_example_map, tokenizer=tokenizer, label_names=label_names), num_proc=16)
 
         from transformers import BertModelWithHeads
         teacher_model = BertModelWithHeads.from_pretrained("bert-base-uncased")
