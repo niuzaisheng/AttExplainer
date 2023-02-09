@@ -7,6 +7,7 @@ from collections import defaultdict, Counter
 
 import numpy as np
 import torch
+from sklearn.metrics import auc
 from accelerate.utils import send_to_device
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, set_seed
@@ -79,7 +80,7 @@ input_feature_shape = input_feature_shape_dict[config.features_type]
 
 if config.use_wandb:
     import wandb
-    wandb.init(project=config.wandb_project_name, config=config)
+    wandb.init(name=f"Explainer_{config.features_type}_{config.data_set_name}_{config.max_game_steps}", project=config.wandb_project_name, config=config)
     wandb_result_table = create_result_table()
 
 
@@ -189,16 +190,14 @@ def record_results(transformer_model, trackers, finished_index, original_batch, 
         fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
                                                      special_tokens_mask, game_status, original_pred_labels, lm_device)
 
-    valid_token_num = [tracker.valid_token_num for tracker in trackers]
-    token_saliency = [tracker.token_saliency for tracker in trackers]
-    batch_threshold_acc = compute_fidelity_threshold_acc(transformer_model, finished_index, valid_token_num, original_batch, special_tokens_mask,
-                                               token_saliency, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID) # [num_threshold, num_examples]
-    batch_threshold_acc = batch_threshold_acc.T
-
     for i, batch_index in enumerate(finished_index):
         trackers[batch_index].fidelity = fidelity_acc[i].item()
         trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
-        trackers[batch_index].threshold_acc = batch_threshold_acc[i]
+
+        compute_fidelity_auc(transformer_model, trackers[batch_index],
+                             original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
+                             lm_device, MASK_TOKEN_ID)
+
         if config.use_wandb:
             trackers[batch_index].save_result_row(tokenizer, label_names, wandb_result_table)
 
@@ -274,7 +273,8 @@ for step, batch in enumerate(eval_dataloader):
                            next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
         # Remove those completed samples and parpare for next game step
-        batch_size, trackers, seq_length, original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss, special_tokens_mask, now_features, now_game_status, batch = \
+        batch_size, trackers, seq_length, original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss, \
+            special_tokens_mask, now_features, now_game_status, batch = \
             gather_unfinished_examples_with_tracker(r.if_done, trackers, seq_length,
                                                     original_seq_length, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
                                                     next_special_tokens_mask, next_features, next_game_status, post_batch)
@@ -288,7 +288,7 @@ for step, batch in enumerate(eval_dataloader):
         fail_index = [i for i in range(batch_size)]
         for i in fail_index:
             trackers[i].done_and_fail()
-        record_results(transformer_model, trackers, fail_index, original_batch, post_batch, 
+        record_results(transformer_model, trackers, fail_index, original_batch, post_batch,
                        next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
 logger.info("Finish eval!")
@@ -304,9 +304,40 @@ reslut["Token Modification Number"] = np.mean([item.masked_token_num[-1] for ite
 # reslut["Word Left Rate"] = np.mean(all_unmasked_token_rate)
 reslut["Average Victim Model Query Times"] = np.mean([item.done_step for item in all_trackers])
 reslut["Fidelity"] = np.mean([item.fidelity for item in all_trackers])
-all_threshold_acc = np.array([item.threshold_acc for item in all_trackers]) # [num_examples, num_threshold]
-reslut["Fidelity AUC"] = compute_fidelity_auc(all_threshold_acc.T)
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
+
+# Compute mask_token_num_pred_probs_auc_score
+all_pred_probs = []
+all_mask_token_num = []
+all_mask_ratio = []
+for tracker in all_trackers:
+    all_pred_probs.extend(tracker.fidelity_threshold_metrics["pred_probs"])
+    all_mask_token_num.extend(tracker.fidelity_threshold_metrics["mask_token_num"])
+    all_mask_ratio.extend(tracker.fidelity_threshold_metrics["mask_ratio"])\
+
+all_pred_probs = np.array(all_pred_probs)
+all_mask_token_num = np.array(all_mask_token_num)
+all_mask_ratio = np.array(all_mask_ratio)
+
+## mask_token_num & pred_probs auc
+sorted_index = np.argsort(all_mask_token_num)
+mask_token_num_pred_probs_auc_score = auc(all_mask_token_num[sorted_index], all_pred_probs[sorted_index])
+reslut["mask_token_num_pred_probs_auc_score"] = mask_token_num_pred_probs_auc_score
+
+## mask_ratio & pred_probs auc
+sorted_index = np.argsort(all_mask_ratio)
+mask_ratio_pred_probs_auc_score = auc(all_mask_ratio[sorted_index], all_pred_probs[sorted_index])
+reslut["mask_ratio_pred_probs_auc_score"] = mask_ratio_pred_probs_auc_score
+
+## average pred_probs in same mask_token_num, for plot
+mask_token_num_pred_probs = {}
+for i in range(len(all_mask_token_num)):
+    mask_token_num = all_mask_token_num[i]
+    pred_probs = all_pred_probs[i]
+    if mask_token_num not in mask_token_num_pred_probs:
+        mask_token_num_pred_probs[mask_token_num] = []
+    mask_token_num_pred_probs[mask_token_num].append(pred_probs)
+
 
 logger.info(f"Result")
 for k, v in reslut.items():
@@ -362,6 +393,10 @@ if config.use_wandb:
     data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_delta_prob.items()]
     table7 = wandb.Table(data=data, columns=["done_step", "delta_prob"])
     wandb.log({"trade_off7": wandb.plot.scatter(table7, "done_step", "delta_prob", title="Delta Prob & Done Step Trade Off")})
+
+    data = [[step, np.mean(value_list)] for (step, value_list) in mask_token_num_pred_probs.items()]
+    table8 = wandb.Table(data=data, columns=["mask_token_num", "pred_prob"])
+    wandb.log({"trade_off8": wandb.plot.scatter(table8, "mask_token_num", "pred_prob", title="Mask Token Num & Pred Prob Trade Off")})
 
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()

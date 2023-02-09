@@ -17,6 +17,8 @@ from typing import Dict, List
 import numpy as np
 import torch
 from torch import Tensor
+from sklearn.metrics import auc
+import matplotlib.pyplot as plt
 from accelerate.utils import send_to_device
 from captum.attr import (FeatureAblation, KernelShap, LayerDeepLift,
                          LayerIntegratedGradients, Occlusion,
@@ -69,7 +71,7 @@ token_quantity_correction = dataset_config["token_quantity_correction"]
 
 if config.use_wandb:
     import wandb
-    wandb.init(name=f"Explainer_{config.explain_method}_{config.max_sample_num}", project=config.wandb_project_name, config=config)
+    wandb.init(name=f"Explainer_{config.explain_method}_{config.data_set_name}_{config.max_sample_num}", project=config.wandb_project_name, config=config)
     table_columns = ["id", "done_step", "golden_label", "original_pred_label", "original_pred_prob",
                      "post_pred_label", "post_pred_prob", "delta_prob", "masked_token_rate", "masked_token_num",
                      "original_input_ids", "post_input_ids", "token_saliency"]
@@ -98,8 +100,14 @@ all_musked_word_rate = []
 all_unmusked_token_rate = []
 all_done_game_step = []  # Average Victim Model Query Times
 all_fidelity = []
-all_fidelity_auc = []
 all_delta_prob = []
+
+
+# For compute fidelity auc
+all_pred_probs = []
+all_mask_token_num = []
+all_mask_ratio =[]
+
 
 all_game_step_done_num = defaultdict(list)  # success rate in each game_step
 all_game_step_mask_rate = defaultdict(list)  # token mask rate in each game_step
@@ -122,7 +130,7 @@ def predict(input_ids, token_type_ids=None, attention_mask=None, step_tracker=No
     else:
         with torch.no_grad():
             output = transformer_model(input_ids=input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
-    return output.logits
+    return output.logits.to("cpu")
 
 def batch_predict(example_list, token_type_ids=None, attention_mask=None, input_special_token_ids=None, step_tracker=None):
     """
@@ -177,33 +185,34 @@ elif config.explain_method == "DeepLift":
     lig = LayerDeepLift(transformer_model, transformer_model.bert.embeddings)
 
 
-thresholds = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
-
-def compute_fidelity_auc(valid_token_num:List[int], input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
-    token_saliency:List[List[float]], original_pred_labels, lm_device, mask_token_id=103):
+thresholds = list(range(1,11,1))
+def compute_fidelity_auc(valid_token_num, input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
+    token_saliency:List[float], original_pred_label, lm_device, mask_token_id=103):
     """
-    The sentences are masked sequentially by the order sort of token_saliency.
-    The auc curve :
-        x is each threshold
-        y is the fidelity value of each threshold, the fidelity value is acc compare to original_pred_labels
+        A sentence example is masked sequentially by the order sort of token_saliency.
     """
 
-    res = [] # nested list, each element is a list of fidelity for each threshold
-    batch_size = input_ids.size(0)
+    assert input_ids.size(0) == 1
     token_saliency = np.array(token_saliency)
-    token_saliency[special_tokens_mask] = -np.inf # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
-    sorted_saliency = np.argsort(token_saliency, axis=1)[:, ::-1]
+    token_saliency[special_tokens_mask[0]] = -np.inf # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
+    sorted_saliency = np.argsort(token_saliency)[::-1]
     sorted_saliency = np.ascontiguousarray(sorted_saliency)
-    original_pred_labels = torch.tensor(original_pred_labels, dtype=torch.long).reshape(-1, 1)
+
+    thresholds_pred_probs = []
+    thresholds_mask_token_num = []
+    thresholds_mask_ratio = []
 
     for threshold in thresholds:
-        num_mask_tokens = [int(seq_length * (1.0 - threshold)) for seq_length in valid_token_num]
-        need_to_be_masked = []
+
+        if valid_token_num >= threshold:
+            mask_token_num = threshold
+        else:
+            break
+
+        mask_ratio = mask_token_num / valid_token_num
         masked_input_ids = input_ids.clone()
         mask_map = torch.zeros_like(masked_input_ids)
-        for i in range(batch_size):
-            need_to_be_masked.append(sorted_saliency[:num_mask_tokens[i]])
-            mask_map[i, need_to_be_masked[i]] = 1
+        mask_map[0, sorted_saliency[0:mask_token_num]] = 1
         mask_map.masked_fill_(special_tokens_mask, 0)
         masked_input_ids.masked_fill_(mask_map, mask_token_id)
         masked_input_ids = send_to_device(masked_input_ids, lm_device)
@@ -211,11 +220,13 @@ def compute_fidelity_auc(valid_token_num:List[int], input_ids, token_type_ids, a
         attention_mask = send_to_device(attention_mask, lm_device)
         with torch.no_grad():
             outputs = transformer_model(input_ids=masked_input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
-            pred_probs = torch.softmax(outputs.logits, dim=-1).detach().cpu()
-            pred_probs = torch.gather(pred_probs, 1, original_pred_labels).reshape(-1).numpy() 
-        res.append(pred_probs)
-    res = np.array(res)
-    return res # [num_threshold, num_examples]
+            pred_prob = torch.softmax(outputs.logits, dim=-1).detach().cpu()
+            pred_prob = pred_prob[0, original_pred_label].item()
+        thresholds_pred_probs.append(pred_prob)
+        thresholds_mask_token_num.append(mask_token_num)
+        thresholds_mask_ratio.append(mask_ratio)
+    
+    return thresholds_pred_probs, thresholds_mask_token_num, thresholds_mask_ratio
 
 
 for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_tqdm):
@@ -327,8 +338,13 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
     mask_result = summarize_res > 0
     token_saliency = summarize_res[0].detach().tolist()
 
-    all_fidelity_auc.append(compute_fidelity_auc([valid_token_num, ], input_ids, token_type_ids, attention_mask, special_tokens_mask,
-                                                [token_saliency, ], [original_pred_label, ], device))
+    # compute auc
+    pred_probs, mask_token_num, mask_ratio = compute_fidelity_auc(valid_token_num, input_ids, token_type_ids, attention_mask, special_tokens_mask,
+                                                token_saliency, original_pred_label, device)
+    assert len(pred_probs) == len(mask_token_num) == len(mask_ratio)
+    all_pred_probs.extend(pred_probs)
+    all_mask_token_num.extend(mask_token_num)
+    all_mask_ratio.extend(mask_ratio)
 
     post_input_ids = input_ids.clone()
     mask_result.masked_fill_(special_tokens_mask, False)
@@ -377,14 +393,30 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
                                     post_pred_label_name, post_pred_prob, delta_prob, mask_rate, musk_token_num,
                                     original_input_ids_text, post_input_ids_text, token_saliency)
 
-from sklearn.metrics import auc
-all_fidelity_auc = np.concatenate(all_fidelity_auc, axis=1) # [num_threshold, num_examples]
-x = np.array(thresholds) # [num_threshold, ]
-# repeat x to [num_threshold, num_examples]
-x = np.repeat(x[:, np.newaxis], all_fidelity_auc.shape[1], axis=1)
-x = x.flatten()
-all_fidelity_auc = all_fidelity_auc.flatten()
-auc_score = auc(x, all_fidelity_auc)
+
+all_pred_probs = np.array(all_pred_probs)
+all_mask_token_num = np.array(all_mask_token_num)
+all_mask_ratio = np.array(all_mask_ratio)
+
+# mask_token_num & pred_probs auc
+sorted_index = np.argsort(all_mask_token_num)
+mask_token_num_pred_probs_auc_score = auc(all_mask_token_num[sorted_index], all_pred_probs[sorted_index])
+
+# mask_ratio & pred_probs auc
+sorted_index = np.argsort(all_mask_ratio)
+mask_ratio_pred_probs_auc_score = auc(all_mask_ratio[sorted_index], all_pred_probs[sorted_index])
+
+
+# average pred_probs in same mask_token_num
+mask_token_num_pred_probs = {}
+for i in range(len(all_mask_token_num)):
+    mask_token_num = all_mask_token_num[i]
+    pred_probs = all_pred_probs[i]
+    if mask_token_num not in mask_token_num_pred_probs:
+        mask_token_num_pred_probs[mask_token_num] = []
+    mask_token_num_pred_probs[mask_token_num].append(pred_probs)
+
+# plot
 
 reslut = {}
 reslut["Eval Example Number"] = all_eval_example_num
@@ -393,8 +425,9 @@ reslut["Token Modification Rate"] = np.mean(all_musked_word_rate)
 reslut["Token Left Rate"] = np.mean(all_unmusked_token_rate)
 reslut["Average Model Query Times"] = np.mean(all_done_game_step)
 reslut["Fidelity"] = np.mean(all_fidelity)
-reslut["Fidelity AUC"] = auc_score
 reslut["delta_prob"] = np.mean(all_delta_prob)
+reslut["mask_token_num_pred_probs_auc_score"] = mask_token_num_pred_probs_auc_score
+reslut["mask_ratio_pred_probs_auc_score"] = mask_ratio_pred_probs_auc_score
 
 logger.info(f"Result")
 for k, v in reslut.items():
@@ -404,25 +437,25 @@ if config.use_wandb:
     for k, v in reslut.items():
         wandb.run.summary[k] = v
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_done_num.items()]
-    table = wandb.Table(data=data, columns=["game_step", "attack_success_rate"])
-    wandb.log({"trade_off": wandb.plot.line(table, "game_step", "attack_success_rate", title="Attack Success Rate & Game Step Trade Off")})
+    # data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_done_num.items()]
+    # table = wandb.Table(data=data, columns=["game_step", "attack_success_rate"])
+    # wandb.log({"trade_off": wandb.plot.line(table, "game_step", "attack_success_rate", title="Attack Success Rate & Game Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_rate.items()]
-    table2 = wandb.Table(data=data, columns=["game_step", "musked_rate"])
-    wandb.log({"trade_off2": wandb.plot.scatter(table2, "game_step", "musked_rate", title="Musked Rate & Game Step Trade Off")})
+    # data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_rate.items()]
+    # table2 = wandb.Table(data=data, columns=["game_step", "musked_rate"])
+    # wandb.log({"trade_off2": wandb.plot.scatter(table2, "game_step", "musked_rate", title="Musked Rate & Game Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_musk_rate_score.items()]
-    table3 = wandb.Table(data=data, columns=["done_step", "musked_rate"])
-    wandb.log({"trade_off3": wandb.plot.scatter(table3, "done_step", "musked_rate", title="Musked Rate & Done Step Trade Off")})
+    # data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_musk_rate_score.items()]
+    # table3 = wandb.Table(data=data, columns=["done_step", "musked_rate"])
+    # wandb.log({"trade_off3": wandb.plot.scatter(table3, "done_step", "musked_rate", title="Musked Rate & Done Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_token_num.items()]
-    table4 = wandb.Table(data=data, columns=["game_step", "mask_token_num"])
-    wandb.log({"trade_off4": wandb.plot.line(table4, "game_step", "mask_token_num", title="Musked Token Number & Game Step Trade Off")})
+    # data = [[step, np.mean(value_list)] for (step, value_list) in all_game_step_mask_token_num.items()]
+    # table4 = wandb.Table(data=data, columns=["game_step", "mask_token_num"])
+    # wandb.log({"trade_off4": wandb.plot.line(table4, "game_step", "mask_token_num", title="Musked Token Number & Game Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in all_done_step_musk_token_num.items()]
-    table5 = wandb.Table(data=data, columns=["done_step", "mask_token_num"])
-    wandb.log({"trade_off5": wandb.plot.scatter(table5, "done_step", "mask_token_num", title="Musked Token Number & Done Step Trade Off")})
+    data = [[step, np.mean(value_list)] for (step, value_list) in mask_token_num_pred_probs.items()]
+    table8 = wandb.Table(data=data, columns=["mask_token_num", "pred_prob"])
+    wandb.log({"trade_off8": wandb.plot.scatter(table8, "mask_token_num", "pred_prob", title="Mask Token Num & Pred Prob Trade Off")})
 
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()

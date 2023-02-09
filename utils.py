@@ -198,8 +198,10 @@ def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_nu
 def layer_forward_hook(module, hook_inputs, hook_outputs, embedding_saver):
     embedding_saver.append(hook_outputs)
 
+
 def keep_tensor_in_same_device(*args, device):
     return [arg.to(device) for arg in args]
+
 
 def get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=False):
 
@@ -305,69 +307,70 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
+fidelity_thresholds = list(range(1, 11, 1)) # mask token number form 1 to 10
 
-fidelity_auc_thresholds = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
-def compute_fidelity_threshold_acc(transformer_model, finished_index, valid_token_num:List[int], original_batch, special_tokens_mask: Tensor,
-    token_saliency:List[List[float]], original_pred_labels, lm_device, mask_token_id=103):
+def compute_fidelity_auc(transformer_model, tracker,
+                         input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
+                         lm_device, mask_token_id=103):
     """
-    The sentences are masked sequentially by the order sort of token_saliency.
-    Only collection finished_index in the whole batch.
-    The auc curve :
-        x is each threshold
-        y is the fidelity value of each threshold, the fidelity value is acc compare to original_pred_labels
+        A sentence example is masked sequentially by the order sort of token_saliency.
+        The order of mask is descending, so the first token is the most salient token.
+        This evaluation metric ignores the combination problem among tokens!
+        This evaluation metric is intended for comparison with other baseline methods.
+        It also emphasizes the importance of combination problems.
     """
+    assert input_ids.size(0) == 1
 
-    res = [] # nested list, each element is a list of fidelity for each threshold
-    finished_batch_size = len(finished_index)
-    _, max_seq_length = original_batch["input_ids"].size()
+    valid_token_num = tracker.valid_token_num
+    token_saliency = tracker.token_saliency
+    original_pred_label = tracker.original_pred_label
+    original_seq_length = tracker.original_seq_length
 
-    token_saliency_map = torch.zeros((finished_batch_size, max_seq_length))
-    for i, j in enumerate(finished_index):
-        token_saliency_list = token_saliency[j]        
-        token_saliency_map[i, :len(token_saliency_list)] = torch.tensor(token_saliency_list)
+    input_ids = input_ids[:, :original_seq_length]
+    token_type_ids = token_type_ids[:, :original_seq_length]
+    attention_mask = attention_mask[:, :original_seq_length]
+    special_tokens_mask = special_tokens_mask[:, :original_seq_length]
 
-    special_tokens_mask = special_tokens_mask[finished_index].contiguous()
-    token_saliency_map.masked_fill_(special_tokens_mask, -np.inf) # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
-    sorted_saliency = torch.argsort(token_saliency_map, dim=1, descending=True)
+    assert input_ids.size(1) == len(token_saliency)
 
-    original_input_ids = original_batch["input_ids"][finished_index].contiguous()
-    token_type_ids = send_to_device(original_batch["token_type_ids"][finished_index].contiguous(), lm_device)
-    attention_mask = send_to_device(original_batch["attention_mask"][finished_index].contiguous(), lm_device)
+    token_saliency = np.array(token_saliency)
+    token_saliency[special_tokens_mask[0]] = -np.inf  # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
+    sorted_saliency = np.argsort(token_saliency)[::-1]
+    sorted_saliency = np.ascontiguousarray(sorted_saliency)
 
-    original_pred_labels = original_pred_labels[finished_index]
+    thresholds_pred_probs = []
+    thresholds_mask_token_num = []
+    thresholds_mask_ratio = []
 
-    for threshold in fidelity_auc_thresholds:
-        num_mask_tokens = []
-        for j in finished_index:
-            num_mask_tokens.append(int(valid_token_num[j] * (1.0 - threshold)))
+    for threshold in fidelity_thresholds:
 
-        masked_input_ids = original_input_ids.clone()
-        mask_map = torch.zeros((finished_batch_size, max_seq_length), dtype=torch.bool)
-        for i, (num_mask_token, sorted_saliency_list) in enumerate(zip(num_mask_tokens, sorted_saliency)):
-            mask_map[i, sorted_saliency_list[:num_mask_token]] = True
-        mask_map.masked_fill_(special_tokens_mask, False)
+        if valid_token_num >= threshold:
+            mask_token_num = threshold
+        else:
+            break
+
+        mask_ratio = mask_token_num / valid_token_num
+        masked_input_ids = input_ids.clone()
+        mask_map = torch.zeros_like(masked_input_ids)
+        mask_map[0, sorted_saliency[0:mask_token_num]] = 1
+        mask_map.masked_fill_(special_tokens_mask, 0)
         masked_input_ids.masked_fill_(mask_map, mask_token_id)
         masked_input_ids = send_to_device(masked_input_ids, lm_device)
-
+        token_type_ids = send_to_device(token_type_ids, lm_device)
+        attention_mask = send_to_device(attention_mask, lm_device)
         with torch.no_grad():
             outputs = transformer_model(input_ids=masked_input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
-            pred_probs = torch.softmax(outputs.logits, dim=-1).detach()
-            pred_probs = torch.gather(pred_probs, 1, original_pred_labels).reshape(-1).cpu().numpy() 
-        res.append(pred_probs)
-    res = np.array(res)
-    return res # [num_threshold, num_examples]
+            pred_prob = torch.softmax(outputs.logits, dim=-1).detach().cpu()
+            pred_prob = pred_prob[0, original_pred_label].item()
+        thresholds_pred_probs.append(pred_prob)
+        thresholds_mask_token_num.append(mask_token_num)
+        thresholds_mask_ratio.append(mask_ratio)
 
-
-def compute_fidelity_auc(all_threshold_acc: np.array):
-    """
-    all_threshold_acc: np.array with size of [num_threshold, num_examples]
-    """
-    from sklearn.metrics import auc
-    x = np.array(fidelity_auc_thresholds) # [num_threshold, ]
-    # repeat x to [num_threshold, num_examples]
-    x = np.repeat(x[:, np.newaxis], all_threshold_acc.shape[1], axis=1)
-    auc_score = auc(x.flatten(), all_threshold_acc.flatten())
-    return auc_score
+    tracker.fidelity_threshold_metrics = {
+            "pred_probs": thresholds_pred_probs,
+            "mask_token_num": thresholds_mask_token_num,
+            "mask_ratio": thresholds_mask_ratio,
+        }
 
 
 def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
@@ -573,10 +576,10 @@ class TokenModifyTracker:
         self.masked_token_rate = []
         self.masked_token_num = []
 
-        # auto track done step
-        self.done_step = None
+        self.done_step = None  # auto track done step
+        # after done
         self.fidelity = None
-        self.threshold_acc = None
+        self.fidelity_threshold_metrics = None
         self.post_input_ids = None
         self.post_pred_label = None
 
@@ -746,7 +749,7 @@ def gather_unfinished_examples_with_tracker(if_done: Tensor,
         left_special_tokens_mask, left_features, left_game_status, left_batch
 
 
-def get_permutation_mask_matrix(seq_length:int, special_tokens_mask: List[bool]=None):
+def get_permutation_mask_matrix(seq_length: int, special_tokens_mask: List[bool] = None):
     num_special_tokens = 0
     if special_tokens_mask is not None:
         num_special_tokens = sum(special_tokens_mask)
