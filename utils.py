@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate.utils import send_to_device
 from torch import Tensor
+from sklearn.metrics import auc
 
 from functools import partial
 from ei_net import modify_effective_information
@@ -307,20 +308,16 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
-fidelity_thresholds = list(range(1, 11, 1)) # mask token number form 1 to 10
+fidelity_auc_max_sampling_num = 100
+fidelity_thresholds = list(range(1, fidelity_auc_max_sampling_num + 1, 1))  # mask token number form 1 to 10
 
-def compute_fidelity_auc(transformer_model, tracker,
+
+def compute_salient_desc_auc(transformer_model, tracker,
                          input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
                          lm_device, mask_token_id=103):
-    """
-        A sentence example is masked sequentially by the order sort of token_saliency.
-        The order of mask is descending, so the first token is the most salient token.
-        This evaluation metric ignores the combination problem among tokens!
-        This evaluation metric is intended for comparison with other baseline methods.
-        It also emphasizes the importance of combination problems.
-    """
     assert input_ids.size(0) == 1
 
+    # salient desc auc
     valid_token_num = tracker.valid_token_num
     token_saliency = tracker.token_saliency
     original_pred_label = tracker.original_pred_label
@@ -366,11 +363,64 @@ def compute_fidelity_auc(transformer_model, tracker,
         thresholds_mask_token_num.append(mask_token_num)
         thresholds_mask_ratio.append(mask_ratio)
 
-    tracker.fidelity_threshold_metrics = {
-            "pred_probs": thresholds_pred_probs,
-            "mask_token_num": thresholds_mask_token_num,
-            "mask_ratio": thresholds_mask_ratio,
-        }
+    tracker.auc_metrics = {
+        "pred_probs": thresholds_pred_probs,
+        "mask_token_num": thresholds_mask_token_num,
+        "mask_ratio": thresholds_mask_ratio,
+    }
+
+
+def compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio):
+    assert len(all_pred_probs) == len(all_mask_token_num) == len(all_mask_ratio)
+
+    all_pred_probs = np.array(all_pred_probs)
+    all_mask_token_num = np.array(all_mask_token_num)
+    all_mask_ratio = np.array(all_mask_ratio)
+
+    # mask_token_num & pred_probs auc
+    sorted_index = np.argsort(all_mask_token_num)
+    mask_token_num_pred_probs_auc_score = auc(all_mask_token_num[sorted_index], all_pred_probs[sorted_index])
+
+    # mask_ratio & pred_probs auc
+    sorted_index = np.argsort(all_mask_ratio)
+    mask_ratio_pred_probs_auc_score = auc(all_mask_ratio[sorted_index], all_pred_probs[sorted_index])
+
+    # plot mask_token_num vs average pred_probs curve 
+    #      and mask_ratio vs average pred_probs curve
+    mask_token_num_pred_probs = defaultdict(list)
+    mask_ratio_pred_probs = defaultdict(list)
+
+    for i in range(len(all_pred_probs)):
+        pred_probs = all_pred_probs[i]
+        mask_token_num = all_mask_token_num[i]
+        mask_ratio = all_mask_ratio[i]
+        mask_token_num_pred_probs[mask_token_num].append(pred_probs)
+        mask_ratio_pred_probs[mask_ratio].append(pred_probs)
+
+    return {
+        "mask_token_num_pred_probs_auc_score": mask_token_num_pred_probs_auc_score,
+        "mask_ratio_pred_probs_auc_score": mask_ratio_pred_probs_auc_score,
+        "mask_token_num_pred_probs" : mask_token_num_pred_probs,
+        "mask_ratio_pred_probs" : mask_ratio_pred_probs
+    }
+
+def get_salient_desc_auc(all_trackers):
+    all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
+    for tracker in all_trackers:
+        all_pred_probs.extend(tracker.auc_metrics["pred_probs"])
+        all_mask_token_num.extend(tracker.auc_metrics["mask_token_num"])
+        all_mask_ratio.extend(tracker.auc_metrics["mask_ratio"])
+
+    return compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio)
+
+def get_modified_order_auc(all_trackers):
+    all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
+    for tracker in all_trackers:
+        all_pred_probs.extend(tracker.prob)
+        all_mask_token_num.extend(tracker.masked_token_num)
+        all_mask_ratio.extend(tracker.masked_token_rate)
+
+    return compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio)
 
 
 def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
@@ -579,7 +629,7 @@ class TokenModifyTracker:
         self.done_step = None  # auto track done step
         # after done
         self.fidelity = None
-        self.fidelity_threshold_metrics = None
+        self.auc_metrics = None
         self.post_input_ids = None
         self.post_pred_label = None
 

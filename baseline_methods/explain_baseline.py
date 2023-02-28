@@ -106,7 +106,8 @@ all_delta_prob = []
 # For compute fidelity auc
 all_pred_probs = []
 all_mask_token_num = []
-all_mask_ratio =[]
+all_mask_ratio = []
+minimum_pred_probs = []
 
 
 all_game_step_done_num = defaultdict(list)  # success rate in each game_step
@@ -184,12 +185,13 @@ elif config.explain_method == "IntegratedGradients":
 elif config.explain_method == "DeepLift":
     lig = LayerDeepLift(transformer_model, transformer_model.bert.embeddings)
 
-
-thresholds = list(range(1,11,1))
+fidelity_auc_max_sampling_num = 100
+thresholds = list(range(1,fidelity_auc_max_sampling_num,1))
 def compute_fidelity_auc(valid_token_num, input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
     token_saliency:List[float], original_pred_label, lm_device, mask_token_id=103):
     """
         A sentence example is masked sequentially by the order sort of token_saliency.
+        Same logic as the `compute_salient_desc_auc` function in the file `utils.py`.
     """
 
     assert input_ids.size(0) == 1
@@ -345,6 +347,7 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
     all_pred_probs.extend(pred_probs)
     all_mask_token_num.extend(mask_token_num)
     all_mask_ratio.extend(mask_ratio)
+    minimum_pred_probs.append(min(pred_probs))
 
     post_input_ids = input_ids.clone()
     mask_result.masked_fill_(special_tokens_mask, False)
@@ -397,6 +400,7 @@ for item in tqdm(eval_dataset, total=len(eval_dataset), disable=config.disable_t
 all_pred_probs = np.array(all_pred_probs)
 all_mask_token_num = np.array(all_mask_token_num)
 all_mask_ratio = np.array(all_mask_ratio)
+minimum_pred_probs = np.array(minimum_pred_probs)
 
 # mask_token_num & pred_probs auc
 sorted_index = np.argsort(all_mask_token_num)
@@ -428,6 +432,7 @@ reslut["Fidelity"] = np.mean(all_fidelity)
 reslut["delta_prob"] = np.mean(all_delta_prob)
 reslut["mask_token_num_pred_probs_auc_score"] = mask_token_num_pred_probs_auc_score
 reslut["mask_ratio_pred_probs_auc_score"] = mask_ratio_pred_probs_auc_score
+reslut["minimum_pred_probs"] = np.mean(minimum_pred_probs)
 
 logger.info(f"Result")
 for k, v in reslut.items():

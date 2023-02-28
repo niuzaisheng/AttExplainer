@@ -7,7 +7,7 @@ from collections import defaultdict, Counter
 
 import numpy as np
 import torch
-from sklearn.metrics import auc
+
 from accelerate.utils import send_to_device
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, set_seed
@@ -194,9 +194,9 @@ def record_results(transformer_model, trackers, finished_index, original_batch, 
         trackers[batch_index].fidelity = fidelity_acc[i].item()
         trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
 
-        compute_fidelity_auc(transformer_model, trackers[batch_index],
-                             original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
-                             lm_device, MASK_TOKEN_ID)
+        compute_salient_desc_auc(transformer_model, trackers[batch_index],
+                                 original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
+                                 lm_device, MASK_TOKEN_ID)
 
         if config.use_wandb:
             trackers[batch_index].save_result_row(tokenizer, label_names, wandb_result_table)
@@ -216,6 +216,9 @@ progress_bar = tqdm(desc="example", total=len(eval_dataloader), disable=config.d
 game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps, disable=config.disable_tqdm)
 
 for step, batch in enumerate(eval_dataloader):
+
+    # if step == 3:
+    #     break
 
     seq_length = batch.pop("seq_length")
     if batch.get("id") is not None:
@@ -306,38 +309,35 @@ reslut["Average Victim Model Query Times"] = np.mean([item.done_step for item in
 reslut["Fidelity"] = np.mean([item.fidelity for item in all_trackers])
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
 
-# Compute mask_token_num_pred_probs_auc_score
-all_pred_probs = []
-all_mask_token_num = []
-all_mask_ratio = []
-for tracker in all_trackers:
-    all_pred_probs.extend(tracker.fidelity_threshold_metrics["pred_probs"])
-    all_mask_token_num.extend(tracker.fidelity_threshold_metrics["mask_token_num"])
-    all_mask_ratio.extend(tracker.fidelity_threshold_metrics["mask_ratio"])\
+"""
+We compute two kind of auc scores:
+    - Modified order auc: by masking the tokens obeying the modified order.
+    - Salient Desc Auc: the auc score of the descending order of token saliency.
 
-all_pred_probs = np.array(all_pred_probs)
-all_mask_token_num = np.array(all_mask_token_num)
-all_mask_ratio = np.array(all_mask_ratio)
+    Modified order auc:
+        A sentence example is masked sequentially by the order of modification.
+        This evaluation metric considers the combination problem, because the combination 
+        order is selected by the agent step by step. This is specific to our method.
 
-## mask_token_num & pred_probs auc
-sorted_index = np.argsort(all_mask_token_num)
-mask_token_num_pred_probs_auc_score = auc(all_mask_token_num[sorted_index], all_pred_probs[sorted_index])
-reslut["mask_token_num_pred_probs_auc_score"] = mask_token_num_pred_probs_auc_score
+    Salient desc auc:
+        A sentence example is masked sequentially by the order sort of token_saliency.
+        The order of mask is descending, so the first token is the most salient token.
+        This evaluation metric ignores the combination problem among tokens!
+        This evaluation metric is intended for comparison with other baseline methods.
+        It also emphasizes the importance of combination problems.
+"""
 
-## mask_ratio & pred_probs auc
-sorted_index = np.argsort(all_mask_ratio)
-mask_ratio_pred_probs_auc_score = auc(all_mask_ratio[sorted_index], all_pred_probs[sorted_index])
-reslut["mask_ratio_pred_probs_auc_score"] = mask_ratio_pred_probs_auc_score
+modified_order_auc = get_modified_order_auc(all_trackers)
+salient_desc_auc = get_salient_desc_auc(all_trackers)
 
-## average pred_probs in same mask_token_num, for plot
-mask_token_num_pred_probs = {}
-for i in range(len(all_mask_token_num)):
-    mask_token_num = all_mask_token_num[i]
-    pred_probs = all_pred_probs[i]
-    if mask_token_num not in mask_token_num_pred_probs:
-        mask_token_num_pred_probs[mask_token_num] = []
-    mask_token_num_pred_probs[mask_token_num].append(pred_probs)
+# We report the auc score of modified_order_auc as the final result.
+# Because the modified_order_auc is emphasizes the combination problem.
+reslut["mask_token_num_pred_probs_auc_score"] = modified_order_auc["mask_token_num_pred_probs_auc_score"]
+reslut["mask_ratio_pred_probs_auc_score"] = modified_order_auc["mask_ratio_pred_probs_auc_score"]
 
+# But we still report the salient_desc_auc for comparison with other baseline methods.
+reslut["mask_token_num_pred_probs_salient_desc_auc_score"] = salient_desc_auc["mask_token_num_pred_probs_auc_score"]
+reslut["mask_ratio_pred_probs_salient_desc_auc_score"] = salient_desc_auc["mask_ratio_pred_probs_auc_score"]
 
 logger.info(f"Result")
 for k, v in reslut.items():
@@ -394,9 +394,23 @@ if config.use_wandb:
     table7 = wandb.Table(data=data, columns=["done_step", "delta_prob"])
     wandb.log({"trade_off7": wandb.plot.scatter(table7, "done_step", "delta_prob", title="Delta Prob & Done Step Trade Off")})
 
-    data = [[step, np.mean(value_list)] for (step, value_list) in mask_token_num_pred_probs.items()]
+    # The auc curve for modified_order_auc
+    data = [[step, np.mean(value_list)] for (step, value_list) in modified_order_auc["mask_token_num_pred_probs"].items()]
     table8 = wandb.Table(data=data, columns=["mask_token_num", "pred_prob"])
-    wandb.log({"trade_off8": wandb.plot.scatter(table8, "mask_token_num", "pred_prob", title="Mask Token Num & Pred Prob Trade Off")})
+    wandb.log({"trade_off8": wandb.plot.scatter(table8, "mask_token_num", "pred_prob", title="(Modified Order)Mask Token Num & Pred Prob Trade Off")})
+
+    data = [[step, np.mean(value_list)] for (step, value_list) in modified_order_auc["mask_ratio_pred_probs"].items()]
+    table9 = wandb.Table(data=data, columns=["mask_ratio", "pred_prob"])
+    wandb.log({"trade_off9": wandb.plot.scatter(table9, "mask_ratio", "pred_prob", title="(Modified Order)Mask Ratio & Pred Prob Trade Off")})
+
+    # The auc curve for salient_desc_auc
+    data = [[step, np.mean(value_list)] for (step, value_list) in salient_desc_auc["mask_token_num_pred_probs"].items()]
+    table10 = wandb.Table(data=data, columns=["mask_token_num", "pred_prob"])
+    wandb.log({"trade_off10": wandb.plot.scatter(table10, "mask_token_num", "pred_prob", title="Mask Token Num & Pred Prob Trade Off")})
+
+    data = [[step, np.mean(value_list)] for (step, value_list) in salient_desc_auc["mask_ratio_pred_probs"].items()]
+    table11 = wandb.Table(data=data, columns=["mask_ratio", "pred_prob"])
+    wandb.log({"trade_off11": wandb.plot.scatter(table11, "mask_ratio", "pred_prob", title="Mask Ratio & Pred Prob Trade Off")})
 
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()
