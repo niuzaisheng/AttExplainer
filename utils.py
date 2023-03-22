@@ -363,27 +363,80 @@ def compute_salient_desc_auc(transformer_model, tracker,
         thresholds_mask_token_num.append(mask_token_num)
         thresholds_mask_ratio.append(mask_ratio)
 
-    tracker.auc_metrics = {
+    tracker.salient_desc_metrics = {
         "pred_probs": thresholds_pred_probs,
         "mask_token_num": thresholds_mask_token_num,
         "mask_ratio": thresholds_mask_ratio,
     }
 
 
-def compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio):
-    assert len(all_pred_probs) == len(all_mask_token_num) == len(all_mask_ratio)
+def compute_modified_order_auc(transformer_model, tracker,
+                         input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
+                         lm_device, mask_token_id=103):
+    assert input_ids.size(0) == 1
 
-    all_pred_probs = np.array(all_pred_probs)
-    all_mask_token_num = np.array(all_mask_token_num)
-    all_mask_ratio = np.array(all_mask_ratio)
+    # modified order auc
+    valid_token_num = tracker.valid_token_num
+    modified_index_order = tracker.modified_index_order
+    original_pred_label = tracker.original_pred_label
+    original_seq_length = tracker.original_seq_length
 
+    input_ids = input_ids[:, :original_seq_length]
+    token_type_ids = token_type_ids[:, :original_seq_length]
+    attention_mask = attention_mask[:, :original_seq_length]
+    special_tokens_mask = special_tokens_mask[:, :original_seq_length]
+
+    # remove modified_index_order where the token is special token
+    modified_index_order = [i for i in modified_index_order if not special_tokens_mask[0, i]]
+    modified_index_order = np.array(modified_index_order)
+
+    thresholds_pred_probs = []
+    thresholds_mask_token_num = []
+    thresholds_mask_ratio = []
+
+    for threshold in fidelity_thresholds:
+
+        if len(modified_index_order) >= threshold:
+            mask_token_num = threshold
+        else:
+            break
+
+        mask_ratio = mask_token_num / valid_token_num
+        masked_input_ids = input_ids.clone()
+        mask_map = torch.zeros_like(masked_input_ids)
+        mask_map[0, modified_index_order[0:mask_token_num]] = 1
+        mask_map.masked_fill_(special_tokens_mask, 0)
+        masked_input_ids.masked_fill_(mask_map, mask_token_id)
+        masked_input_ids = send_to_device(masked_input_ids, lm_device)
+        token_type_ids = send_to_device(token_type_ids, lm_device)
+        attention_mask = send_to_device(attention_mask, lm_device)
+        with torch.no_grad():
+            outputs = transformer_model(input_ids=masked_input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask)
+            pred_prob = torch.softmax(outputs.logits, dim=-1).detach().cpu()
+            pred_prob = pred_prob[0, original_pred_label].item()
+        thresholds_pred_probs.append(pred_prob)
+        thresholds_mask_token_num.append(mask_token_num)
+        thresholds_mask_ratio.append(mask_ratio)
+
+    tracker.modified_order_metrics = {
+        "pred_probs": thresholds_pred_probs,
+        "mask_token_num": thresholds_mask_token_num,
+        "mask_ratio": thresholds_mask_ratio,
+    }
+
+
+def compute_auc(x, y):
+    assert len(x) == len(y)
+    x = np.array(x)
+    y = np.array(y)
     # mask_token_num & pred_probs auc
-    sorted_index = np.argsort(all_mask_token_num)
-    mask_token_num_pred_probs_auc_score = auc(all_mask_token_num[sorted_index], all_pred_probs[sorted_index])
+    sorted_index = np.argsort(x)
+    auc_score = auc(x[sorted_index], y[sorted_index])
 
-    # mask_ratio & pred_probs auc
-    sorted_index = np.argsort(all_mask_ratio)
-    mask_ratio_pred_probs_auc_score = auc(all_mask_ratio[sorted_index], all_pred_probs[sorted_index])
+    return auc_score
+
+def plot_mask_token_num_curve(all_pred_probs, all_mask_token_num, all_mask_ratio):
+    assert len(all_pred_probs) == len(all_mask_token_num) == len(all_mask_ratio)
 
     # plot mask_token_num vs average pred_probs curve 
     #      and mask_ratio vs average pred_probs curve
@@ -398,29 +451,50 @@ def compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio):
         mask_ratio_pred_probs[mask_ratio].append(pred_probs)
 
     return {
-        "mask_token_num_pred_probs_auc_score": mask_token_num_pred_probs_auc_score,
-        "mask_ratio_pred_probs_auc_score": mask_ratio_pred_probs_auc_score,
         "mask_token_num_pred_probs" : mask_token_num_pred_probs,
         "mask_ratio_pred_probs" : mask_ratio_pred_probs
     }
 
-def get_salient_desc_auc(all_trackers):
-    all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
-    for tracker in all_trackers:
-        all_pred_probs.extend(tracker.auc_metrics["pred_probs"])
-        all_mask_token_num.extend(tracker.auc_metrics["mask_token_num"])
-        all_mask_ratio.extend(tracker.auc_metrics["mask_ratio"])
 
-    return compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio)
+"""
+    We compute the auc score at step 1 to 10. Marked as @K.
+"""
+auc_steps = list(range(1, 11))
+def get_salient_desc_auc(all_trackers):
+    res = {
+        "mask_token_num_pred_probs_auc_score" : {},
+        "mask_ratio_pred_probs_auc_score" : {}
+    }
+    for auc_step in auc_steps:
+        all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
+        for tracker in all_trackers:
+            tracker_step = len(tracker.salient_desc_metrics["pred_probs"])
+            if tracker_step > auc_step:
+                tracker_step = auc_step
+            all_pred_probs.extend([tracker.original_prob] + tracker.salient_desc_metrics["pred_probs"][:tracker_step])
+            all_mask_token_num.extend([0.0, ] + tracker.salient_desc_metrics["mask_token_num"][:tracker_step])
+            all_mask_ratio.extend([0.0, ] +tracker.salient_desc_metrics["mask_ratio"][:tracker_step])
+        res["mask_token_num_pred_probs_auc_score"][auc_step] = compute_auc(all_mask_token_num, all_pred_probs)
+        res["mask_ratio_pred_probs_auc_score"][auc_step] = compute_auc(all_mask_ratio, all_pred_probs)
+    return res
 
 def get_modified_order_auc(all_trackers):
-    all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
-    for tracker in all_trackers:
-        all_pred_probs.extend(tracker.prob)
-        all_mask_token_num.extend(tracker.masked_token_num)
-        all_mask_ratio.extend(tracker.masked_token_rate)
-
-    return compute_auc(all_pred_probs, all_mask_token_num, all_mask_ratio)
+    res = {
+        "mask_token_num_pred_probs_auc_score" : {},
+        "mask_ratio_pred_probs_auc_score" : {}
+    }
+    for auc_step in auc_steps:
+        all_pred_probs, all_mask_token_num, all_mask_ratio = [], [], []
+        for tracker in all_trackers:
+            tracker_step = len(tracker.modified_order_metrics["pred_probs"])
+            if tracker_step > auc_step:
+                tracker_step = auc_step
+            all_pred_probs.extend([tracker.original_prob] + tracker.modified_order_metrics["pred_probs"][:tracker_step])
+            all_mask_token_num.extend([0.0, ] + tracker.modified_order_metrics["mask_token_num"][:tracker_step])
+            all_mask_ratio.extend([0.0, ] + tracker.modified_order_metrics["mask_ratio"][:tracker_step])
+        res["mask_token_num_pred_probs_auc_score"][auc_step] = compute_auc(all_mask_token_num, all_pred_probs)
+        res["mask_ratio_pred_probs_auc_score"][auc_step] = compute_auc(all_mask_ratio, all_pred_probs)
+    return res
 
 
 def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
@@ -544,7 +618,6 @@ def gather_unfinished_examples(if_done: Tensor, batch_size: int, seq_length: Lis
             left_original_pred_labels, left_token_word_position_map, left_cumulative_rewards, \
             left_original_acc, left_original_loss, left_original_prob
 
-
 def clone_batch(batch: Dict[str, Tensor]):
     """
     Clone a batch of inputs and targets.
@@ -574,6 +647,7 @@ class GameEnvironmentVariables(NamedTuple):
     unmask_token_num: Tensor
     delta_logits: Tensor
     delta_loss: Tensor
+
 
 
 # TokenModifyTracker and assist tracking functions
@@ -623,13 +697,15 @@ class TokenModifyTracker:
         self.loss = []
         self.delta_prob = []
         self.delta_logits = []
-        self.masked_token_rate = []
-        self.masked_token_num = []
+        self.masked_token_rate: List or float = []
+        self.masked_token_num: List or int = []
+        self._token_saliency = None
 
         self.done_step = None  # auto track done step
         # after done
         self.fidelity = None
-        self.auc_metrics = None
+        self.salient_desc_metrics = None
+        self.modified_order_metrics = None
         self.post_input_ids = None
         self.post_pred_label = None
 
@@ -640,10 +716,10 @@ class TokenModifyTracker:
         return self.original_seq_length - self.token_quantity_correction
 
     def update(self,
-               action: int,
-               if_done: bool,
-               if_success: bool,
-               rewards: float,  # step reward
+               action: int = None,
+               if_done: bool= None,
+               if_success: bool= None,
+               rewards: float= None,  # step reward
                post_prob: float = None,
                post_pred_label: int = None,
                post_logits: float = None,
@@ -657,18 +733,19 @@ class TokenModifyTracker:
         if self.done_step is not None:
             raise Exception("Tracker is done, can't update")
 
-        if self.token_replacement_strategy == "delete":
-            # in delete mode, delete index from origional_index and add to modified_index_order
-            origional_index = self.left_index[action]
-            self.modified_index_order.append(origional_index)
-            self.left_index.remove(origional_index)
+        if action:
+            if self.token_replacement_strategy == "delete":
+                # in delete mode, delete index from origional_index and add to modified_index_order
+                origional_index = self.left_index[action]
+                self.modified_index_order.append(origional_index)
+                self.left_index.remove(origional_index)
 
-        elif self.token_replacement_strategy == "mask":
-            # in mask mode, add index to modified_index_order
-            origional_index = self.left_index[action]
-            self.modified_index_order.append(origional_index)
-        else:
-            raise ValueError("token_replacement_strategy should be delete or mask")
+            elif self.token_replacement_strategy == "mask":
+                # in mask mode, add index to modified_index_order
+                origional_index = self.left_index[action]
+                self.modified_index_order.append(origional_index)
+            else:
+                raise ValueError("token_replacement_strategy should be delete or mask")
 
         assert not (not if_done and if_success), "Can't be success but not done"
         self.if_done = if_done
@@ -693,12 +770,20 @@ class TokenModifyTracker:
 
     @property
     def token_saliency(self):
-        saliency = defaultdict(float)
-        last_prob = self.original_prob
-        for token_index, prob in zip(self.modified_index_order, self.prob):
-            saliency[token_index] = last_prob - prob
-            last_prob = prob
-        return [saliency[i] for i in range(self.original_seq_length)]
+        if self._token_saliency is not None:
+            return self._token_saliency
+        else:
+            saliency = defaultdict(float)
+            last_prob = self.original_prob
+            for token_index, prob in zip(self.modified_index_order, self.prob):
+                saliency[token_index] = last_prob - prob
+                last_prob = prob
+            return [saliency[i] for i in range(self.original_seq_length)]
+        
+    def set_token_saliency(self, token_saliency):
+        if isinstance(token_saliency, np.ndarray):
+            token_saliency = token_saliency.tolist()
+        self._token_saliency = token_saliency
 
     def save_result_row(self, tokenizer, label_names, wandb_result_table, completed_steps=None):
         golden_label = label_names[self.golden_label]
