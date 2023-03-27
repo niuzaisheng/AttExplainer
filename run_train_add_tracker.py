@@ -261,7 +261,7 @@ for epoch in range(config.max_train_epoch):
         original_logits = batch_logits(original_outputs, original_pred_labels, device=dqn.device)
         original_loss = batch_loss(original_outputs, original_pred_labels, num_labels, device=dqn.device)
 
-        update_dict({"original_prob": original_prob.mean().item()}, completed_steps)
+        # update_dict({"original_prob": original_prob.mean().item()}, completed_steps)
         trackers = create_trackers(ids, seq_length, batch["input_ids"], token_word_position_map,
                                    golden_labels, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
                                    token_quantity_correction, config.token_replacement_strategy)
@@ -300,7 +300,7 @@ for epoch in range(config.max_train_epoch):
             success_index = [i for i in range(batch_size) if r.if_done[i].item() == 1]
             if len(success_index) != 0:
                 batch_done_step.extend([game_step] * len(success_index))
-                if completed_steps % 10 == 0:
+                if completed_steps % 2 == 0:
                     finished_index = success_index
                     update_dict({
                         "done_rewards": r.rewards[success_index].mean().item(),
@@ -308,8 +308,8 @@ for epoch in range(config.max_train_epoch):
                         "done_unmasked_token_rate": r.unmasked_token_rate[success_index].mean().item(),
                         "done_delta_prob": r.delta_prob[success_index].mean().item(),
                     }, step=completed_steps)
-                if completed_steps % 100 == 0:
-                    record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
+                # if completed_steps % 100 == 0:
+                #     record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
             if completed_steps % 10 == 0:
                 update_dict({
@@ -349,10 +349,6 @@ for epoch in range(config.max_train_epoch):
 
                 # BUG record_results original_pred_labels is reflash by gather_unfinished_examples_with_tracker
                 # record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
-
-            if batch_size == 0:
-                update_dict({"all_done_step": game_step}, step=completed_steps)
-                break
 
         done_rate = 1 - batch_size / batch_size_at_start
         update_dict({"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
