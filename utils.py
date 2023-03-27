@@ -19,14 +19,15 @@ logger.setLevel(logging.INFO)
 # Different feature extraction methods will get feature matrices of different dimensions
 # For DQN gather single step data into batch from replay buffer
 input_feature_shape_dict = {
-    "statistical_bin": 2,
     "const": 2,
     "random": 2,
+    "input_ids": 1,
+    "original_embedding": 2,
+    "statistical_bin": 2,
     "effective_information": 1,
     "gradient": 2,
     "gradient_input": 2,
-    "original_embedding": 2,
-    "input_ids": 1,
+    "mixture": 2,
 }
 
 
@@ -149,6 +150,7 @@ def get_EI_attention_features(model_outputs, batch_seq_len):
 
 
 def get_attention_features(model_outputs, attention_mask, batch_seq_len, bins_num):
+    # statistical_bin
     batch_attentions = model_outputs.attentions
     attentions = torch.cat([torch.mean(layer, dim=1, keepdim=True) for layer in batch_attentions], dim=1)
     attentions = attentions.mean(1).detach()
@@ -232,6 +234,31 @@ def use_original_embedding_as_features(transformer_model, post_batch):
         hook.remove()
         input_embedding = embedding_saver[0]
     return input_embedding.detach(), model_outputs
+
+def get_mixture_features(transformer_model, post_batch, original_pred_labels, seq_length, bins_num):
+    # mixture of original_embedding, statistical_bin, and gradient features
+    transformer_model.zero_grad()
+    original_pred_labels = original_pred_labels.view(-1)
+    embedding_layer = transformer_model.bert.embeddings
+    embedding_saver = []
+    with torch.autograd.set_grad_enabled(True):
+        hook = embedding_layer.register_forward_hook(partial(layer_forward_hook, embedding_saver=embedding_saver))
+        model_outputs = transformer_model(**post_batch, output_attentions=True)
+        logits = model_outputs.logits
+        hook.remove()
+        input_embedding = embedding_saver[0]
+        label_logits = logits[torch.arange(logits.size(0), device=logits.device), original_pred_labels]
+        grads = torch.autograd.grad(torch.unbind(label_logits), input_embedding)[0]  # [batch_size, seq_len, model_rep_dim]
+    
+    with torch.no_grad():
+        embedding_features = input_embedding.detach() # [batch_size, seq_len, model_rep_dim]
+        attention_features = get_attention_features(model_outputs, post_batch["attention_mask"], seq_length, bins_num) # [batch_size, seq_len, bins_num * 2 + 4]
+        grads_features = grads.detach() # [batch_size, seq_len, model_rep_dim]
+
+    # mixture of original_embedding, statistical_bin, and gradient features
+    extracted_features = torch.cat([embedding_features, attention_features, grads_features], dim=-1) # [batch_size, seq_len, 2 * model_rep_dim + bins_num * 2 + 4]
+
+    return extracted_features, model_outputs
 
 
 def batch_loss(model_output, y_ref, num_labels, device=None):

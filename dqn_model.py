@@ -102,6 +102,26 @@ class DQNNetEmbedding(nn.Module):
         x = self.out(x)  # [B, seq, 1]
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
+
+class DQNNetMixture(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # input: [batch_size, seq_len, 2 * model_rep_dim + bins_num * 2 + 4]
+        self.bins_num = config.bins_num
+        self.layer1 = nn.Linear( 2 * 768 + self.bins_num * 2 + 4, 64)
+        self.layer2 = nn.Linear(64, 8)
+        self.out = nn.Linear(8+1, 1)
+
+    def forward(self, x, s):
+        batch_size, _, max_seq_len, dim = x.size()  # [B, 1, seq, dim]
+        x = x.reshape(batch_size, max_seq_len, dim)  # [B, seq, dim]
+        x = self.layer1(x)  # [B, seq, 64]
+        x = torch.relu(x)
+        x = self.layer2(x)  # [B, seq, 8]
+        x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
+        x = self.out(x)  # [B, seq, 1]
+        return x.reshape(batch_size, max_seq_len)  # [B , seq]
+
 def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
     """
         Gathers tensors from list of dict into dict. 
@@ -159,6 +179,8 @@ class DQN(object):
             ModelClass = DQNNet2D
         elif config.features_type == "input_ids":
             ModelClass = DQNNetEmbedding
+        elif config.features_type == "mixture":
+            ModelClass = DQNNetMixture
         else:
             if input_feature_shape == 2:
                 ModelClass = DQNNet
@@ -378,66 +400,3 @@ class DQN(object):
         self.optimizer.zero_grad()
 
         return dqn_loss.detach().item()
-
-
-# class DQN_eval(object):
-#     """
-#         DQN progress for eval
-#     """
-
-#     def __init__(self, config, mask_token_id=103, input_feature_shape=2):
-
-#         self.device = torch.device("cpu")
-#         if config.features_type == "gradient":
-#             self.eval_net = DQNNet4Grad(config)
-#         else:
-#             if input_feature_shape == 2:
-#                 self.eval_net = DQNNet(config)
-#             elif input_feature_shape == 1:
-#                 self.eval_net = DQNNet1D(config)
-
-#         self.mask_token_id = mask_token_id
-#         with open(config.dqn_weights_path, "rb") as f:
-#             self.eval_net.load_state_dict(torch.load(f, map_location=self.device))
-
-#     def choose_action_for_eval(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status):
-#         target_device = batch["input_ids"].device
-#         self.eval_net.eval()
-#         with torch.no_grad():
-#             now_features = send_to_device(now_features, self.device)
-#             game_status = send_to_device(game_status, self.device)
-#             actions = self.eval_net(now_features, game_status).detach()
-#         actions = actions.masked_fill(special_tokens_mask, -np.inf)
-#         select_action = torch.argmax(actions, dim=1)  # [B, seq_len]
-
-#         next_game_status = game_status.clone()
-#         for i, position in enumerate(select_action):
-#             if game_status[i, position].item() == 0:
-#                 next_game_status[i, position] = 1
-#             else:
-#                 next_game_status[i, position] = 0
-
-#         mask_map = next_game_status == 1
-
-#         # On target device:
-#         mask_map = mask_map.to(target_device)
-#         post_input_ids = batch["input_ids"].clone().detach()
-#         post_input_ids = post_input_ids.masked_fill(~mask_map, self.mask_token_id)
-
-#         for i, index in enumerate(batch_seq_length):
-#             post_input_ids[i, index:] = 0
-
-#         post_batch = {"input_ids": post_input_ids,
-#                       "attention_mask": batch["attention_mask"],
-#                       "token_type_ids": batch["token_type_ids"]}
-
-#         return post_batch, select_action, next_game_status, actions
-
-#     def initial_action(self, batch, special_tokens_mask, seq_length, batch_max_seq_length, lm_device):
-#         batch_size = len(seq_length)
-#         actions = torch.zeros((batch_size, batch_max_seq_length), device=lm_device)
-#         game_status = torch.ones((batch_size, batch_max_seq_length))
-#         for i, index in enumerate(seq_length):
-#             game_status[i, index:] = 0
-#         action_value = torch.zeros((batch_size, batch_max_seq_length))
-#         return actions, game_status

@@ -45,7 +45,9 @@ def parse_args():
     parser.add_argument("--max_game_steps", type=int, default=100)
     parser.add_argument("--dqn_weights_path", type=str)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
-                        choices=["statistical_bin", "const", "random", "effective_information", "gradient", "gradient_input", "original_embedding", "input_ids"])
+                        choices=["const", "random", "input_ids", "original_embedding",
+                                 "statistical_bin", "effective_information",
+                                 "gradient", "gradient_input", "mixture"])
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
@@ -191,6 +193,8 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
         extracted_features, post_outputs = get_gradient_features(transformer_model, post_batch, original_pred_labels, times_input=True)
     elif features_type == "original_embedding":
         extracted_features, post_outputs = use_original_embedding_as_features(transformer_model, post_batch)
+    elif features_type == "mixture":
+        extracted_features, post_outputs = get_mixture_features(transformer_model, post_batch, original_pred_labels, seq_length, bins_num)
     else:
         with torch.no_grad():
             post_outputs = transformer_model(**post_batch, output_attentions=True)
@@ -220,7 +224,6 @@ progress_bar = tqdm(total=config.max_train_epoch * len(simulate_dataloader), dis
 exp_name = "train"
 
 status_dict = {}  # for tqdm display some info
-
 
 def update_dict(any_dict, step):
     status_dict.update(any_dict)
