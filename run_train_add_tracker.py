@@ -106,7 +106,7 @@ tokenizer = AutoTokenizer.from_pretrained(dataset_config["model_name_or_path"])
 MASK_TOKEN_ID = tokenizer.mask_token_id
 config.vocab_size = tokenizer.vocab_size
 
-logger.info("Start loading!")
+logger.info("Start loading data and model!")
 transformer_model, simulate_dataloader, eval_dataloader = get_dataloader_and_model(config, dataset_config, tokenizer)
 logger.info("Finish loading!")
 
