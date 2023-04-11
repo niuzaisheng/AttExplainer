@@ -5,7 +5,6 @@ import logging
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from accelerate.utils import send_to_device
 from torch import Tensor
 from sklearn.metrics import auc
@@ -335,9 +334,7 @@ def batch_reversed_accuracy(model_output, y_ref, device=None):
     return accuracy, y_pred, prob
 
 
-fidelity_auc_max_sampling_num = 100
-fidelity_thresholds = list(range(1, fidelity_auc_max_sampling_num + 1, 1))  # mask token number form 1 to 10
-
+modification_budget_thresholds = list(range(1,11))  # mask token number form 1 to 10
 
 def compute_salient_desc_auc(transformer_model, tracker,
                          input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
@@ -366,7 +363,7 @@ def compute_salient_desc_auc(transformer_model, tracker,
     thresholds_mask_token_num = []
     thresholds_mask_ratio = []
 
-    for threshold in fidelity_thresholds:
+    for threshold in modification_budget_thresholds:
 
         if valid_token_num >= threshold:
             mask_token_num = threshold
@@ -421,7 +418,7 @@ def compute_modified_order_auc(transformer_model, tracker,
     thresholds_mask_token_num = []
     thresholds_mask_ratio = []
 
-    for threshold in fidelity_thresholds:
+    for threshold in modification_budget_thresholds:
 
         if len(modified_index_order) >= threshold:
             mask_token_num = threshold
@@ -524,14 +521,14 @@ def get_modified_order_auc(all_trackers):
     return res
 
 
-def compute_fidelity_when_masked(original_model, finished_index, batch, special_tokens_mask,
+def compute_fidelity_when_masked(original_model, finished_index, original_batch, special_tokens_mask,
                                  game_status, original_pred_labels, lm_device, mask_token_id=103):
 
+    # In game_status, 1 is visible to the model, 0 is invisible to the model.
     fidelity_plus_batch = {}
-    fidelity_minus_batch = {}
-    for key in batch.keys():
-        fidelity_plus_batch[key] = batch[key][finished_index]
-        fidelity_minus_batch[key] = batch[key][finished_index]
+    original_batch = send_to_device(original_batch, lm_device)
+    for key in original_batch.keys():
+        fidelity_plus_batch[key] = original_batch[key][finished_index].clone()
 
     finish_game_status = game_status[finished_index]
     finish_special_tokens_mask = special_tokens_mask[finished_index]
@@ -542,20 +539,14 @@ def compute_fidelity_when_masked(original_model, finished_index, batch, special_
     fidelity_plus_mask = fidelity_plus_mask.masked_fill(finish_special_tokens_mask, False)
     fidelity_plus_mask = send_to_device(fidelity_plus_mask, lm_device)
 
-    fidelity_minus_mask = finish_game_status.bool()
-    fidelity_minus_mask = fidelity_minus_mask.masked_fill(finish_special_tokens_mask, False)
-    fidelity_minus_mask = send_to_device(fidelity_minus_mask, lm_device)
     fidelity_plus_batch["input_ids"] = torch.masked_fill(fidelity_plus_batch["input_ids"], fidelity_plus_mask, mask_token_id)
-    fidelity_minus_batch["input_ids"] = torch.masked_fill(fidelity_minus_batch["input_ids"], fidelity_minus_mask, mask_token_id)
 
     with torch.no_grad():
         fidelity_plus_outputs = original_model(**fidelity_plus_batch)
-        fidelity_minus_outputs = original_model(**fidelity_minus_batch)
 
     fidelity_plus_acc, finish_pred_labels, _ = batch_reversed_accuracy(fidelity_plus_outputs, finish_original_pred_labels, device="cpu")
-    fidelity_minus_acc, finish_pred_labels, _ = batch_accuracy(fidelity_minus_outputs, finish_original_pred_labels, device="cpu")
 
-    return fidelity_plus_acc, fidelity_minus_acc
+    return fidelity_plus_acc
 
 
 def compute_fidelity_when_deleted(original_model, finished_index, batch, special_tokens_mask,

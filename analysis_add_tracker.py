@@ -100,12 +100,12 @@ def get_rewards(original_seq_length=None,
                 post_acc=None, post_prob=None, post_logits=None, post_loss=None,
                 game_status=None, game_step=None):
 
-    original_seq_length = (torch.FloatTensor(original_seq_length) - token_quantity_correction)
-    original_seq_length, game_status = keep_tensor_in_same_device(original_seq_length, game_status, device="cpu")
+    valid_token_num = torch.FloatTensor(original_seq_length) - token_quantity_correction
+    valid_token_num, game_status = keep_tensor_in_same_device(valid_token_num, game_status, device="cpu")
 
     unmask_token_num = game_status.sum(dim=1) - token_quantity_correction
-    unmasked_token_rate = unmask_token_num / original_seq_length
-    masked_token_num = original_seq_length - unmask_token_num
+    unmasked_token_rate = unmask_token_num / valid_token_num
+    masked_token_num = valid_token_num - unmask_token_num
     masked_token_rate = 1 - unmasked_token_rate
     delta_prob = (original_prob - post_prob)
     delta_logits = None
@@ -187,11 +187,11 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, co
 def record_results(transformer_model, trackers, finished_index, original_batch, post_batch,
                    special_tokens_mask, game_status, original_pred_labels, lm_device):
     if config.token_replacement_strategy == "mask":
-        fidelity_acc, _ = compute_fidelity_when_masked(transformer_model, finished_index, post_batch,
+        fidelity_acc = compute_fidelity_when_masked(transformer_model, finished_index, original_batch,
                                                        special_tokens_mask, game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
 
     elif config.token_replacement_strategy == "delete":
-        fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
+        fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, original_batch,
                                                      special_tokens_mask, game_status, original_pred_labels, lm_device)
 
     for i, batch_index in enumerate(finished_index):
@@ -260,7 +260,7 @@ for step, batch in enumerate(eval_dataloader):
     all_trackers.extend(trackers)
 
     original_seq_length = copy.deepcopy(seq_length)
-    # initial batch
+    # initial batch. In game_status, 1 the token is visible to the model, 0 is invisible to the model.
     actions, now_game_status = dqn.initial_action(batch, special_tokens_mask, seq_length, batch_max_seq_length, dqn.device)
     now_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, batch, seq_length, config,
                                                                                            lm_device=lm_device, dqn_device=dqn.device)

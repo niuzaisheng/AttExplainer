@@ -350,6 +350,9 @@ for epoch in range(config.max_train_epoch):
                 # BUG record_results original_pred_labels is reflash by gather_unfinished_examples_with_tracker
                 # record_results(completed_steps, transformer_model, trackers, success_index, post_batch, next_special_tokens_mask, next_game_status, original_pred_labels, lm_device)
 
+            if batch_size == 0:
+                break
+
         done_rate = 1 - batch_size / batch_size_at_start
         update_dict({"average_done_step": np.mean(batch_done_step), "done_rate": done_rate}, step=completed_steps)
         progress_bar.update(1)

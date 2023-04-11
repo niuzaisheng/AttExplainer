@@ -28,7 +28,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from data_utils import get_dataset_and_model, get_dataset_config
-from utils import StepTracker, TokenModifyTracker, get_salient_desc_auc, create_result_table
+from utils import StepTracker, TokenModifyTracker, get_salient_desc_auc, create_result_table, batch_reversed_accuracy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -168,7 +168,8 @@ elif config.explain_method == "IntegratedGradients":
 elif config.explain_method == "DeepLift":
     lig = LayerDeepLift(transformer_model, transformer_model.bert.embeddings)
 
-thresholds = list(range(1,11))
+
+modification_budget_thresholds = list(range(1,11)) # mask token number form 1 to 10
 def compute_salient_desc_auc(valid_token_num, input_ids, token_type_ids, attention_mask, special_tokens_mask: Tensor,
     modified_index_order:List[float], original_pred_label, lm_device, mask_token_id=103):
     """
@@ -182,7 +183,7 @@ def compute_salient_desc_auc(valid_token_num, input_ids, token_type_ids, attenti
     thresholds_mask_token_num = []
     thresholds_mask_ratio = []
 
-    for threshold in thresholds:
+    for threshold in modification_budget_thresholds:
         if valid_token_num >= threshold:
             mask_token_num = threshold
         else:
@@ -212,6 +213,35 @@ def compute_salient_desc_auc(valid_token_num, input_ids, token_type_ids, attenti
     }
 
 
+def compute_fidelity_when_masked(original_model, original_batch, special_tokens_mask,
+                                 key_position, original_pred_labels, lm_device, mask_token_id=103):
+    """
+        Same logic as the `compute_fidelity_when_masked` function in the file `utils.py`.
+    """
+
+    fidelity_plus_batch = {}
+    for key in original_batch.keys():
+        fidelity_plus_batch[key] = original_batch[key].clone()
+
+    finish_game_status = key_position
+    fidelity_plus_mask = finish_game_status.bool()
+    fidelity_plus_mask = fidelity_plus_mask.masked_fill(special_tokens_mask, False)
+
+    fidelity_plus_input_ids = torch.masked_fill(fidelity_plus_batch["input_ids"], fidelity_plus_mask, mask_token_id)
+    fidelity_plus_batch["input_ids"] = fidelity_plus_input_ids
+
+    fidelity_plus_batch = send_to_device(fidelity_plus_batch, lm_device)
+    with torch.no_grad():
+        fidelity_plus_outputs = original_model(**fidelity_plus_batch)
+        post_pred_label = torch.argmax(fidelity_plus_outputs.logits, dim=-1).detach().cpu()
+        # NOTE: We look at the results after the perturbation is compared with the probability of the original predicted label.
+        post_pred_prob = torch.softmax(fidelity_plus_outputs.logits, dim=-1).detach().cpu()[0, original_pred_labels[0]]
+
+    fidelity_plus_acc, _, _ = batch_reversed_accuracy(fidelity_plus_outputs, original_pred_labels, device="cpu")
+
+    return fidelity_plus_acc, fidelity_plus_input_ids[0], post_pred_label, post_pred_prob
+
+
 for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=config.disable_tqdm):
 
     if config.debug and i >= 10:
@@ -230,6 +260,11 @@ for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=co
     token_type_ids = encode.token_type_ids
     attention_mask = encode.attention_mask
     special_tokens_mask = encode.special_tokens_mask.bool()
+    original_batch = {
+        "input_ids": input_ids,
+        "token_type_ids": token_type_ids,
+        "attention_mask": attention_mask,
+    }
     input_special_token_ids = input_ids.clone().masked_fill_(~special_tokens_mask, 0)
     input_special_token_ids = input_special_token_ids
 
@@ -238,9 +273,10 @@ for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=co
 
     golden_label = item["label"]
 
-    predict_loogits = predict(input_ids, token_type_ids, attention_mask)[0]
-    original_pred_label = torch.argmax(predict_loogits).item()
-    original_pred_prob = torch.softmax(predict_loogits, 0)[original_pred_label].item()
+    predict_loogits = predict(input_ids, token_type_ids, attention_mask)
+    original_pred_labels = torch.argmax(predict_loogits, dim=-1).unsqueeze(0) # reshape shape into [1, 1]
+    original_pred_label = original_pred_labels.item()
+    original_pred_prob = torch.softmax(predict_loogits, dim=-1)[0, original_pred_label].item()
 
     tracker = TokenModifyTracker(example_id, seq_length, input_ids[0], None,
                                  golden_label, None, original_pred_label, original_pred_prob, predict_loogits, None,
@@ -321,14 +357,28 @@ for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=co
         raise NotImplementedError(f"explain method {config.explain_method} not implemented")
 
     # size of summarize_res is [1, seq_len]
-    mask_result = summarize_res > 0
-    token_saliency = summarize_res[0].detach().numpy()
+    token_saliency = summarize_res[0].detach()
     token_saliency[special_tokens_mask[0]] = -np.inf # set the saliency of special tokens to 0.0, like [CLS], [SEP], [PAD].
-    tracker.set_token_saliency(token_saliency)
-    modified_index_order = np.argsort(token_saliency)[::-1]
+    tracker.set_token_saliency(token_saliency.numpy())
+
+    tracker.done_step = step_tracker.current_step
+    modified_index_order = np.argsort(token_saliency.numpy())[::-1]
     modified_index_order = np.ascontiguousarray(modified_index_order).tolist()
     tracker.modified_index_order = modified_index_order
 
+    key_position = token_saliency > 0
+    masked_token_num = key_position.sum().item()
+    tracker.masked_token_num.append(masked_token_num)
+    tracker.masked_token_rate.append(masked_token_num / valid_token_num)
+
+    fidelity_acc, post_input_ids,  post_pred_label, post_pred_prob = compute_fidelity_when_masked(transformer_model, original_batch, special_tokens_mask, 
+                                                                key_position, original_pred_labels, device, mask_token_id=MASK_TOKEN_ID)
+    tracker.fidelity = bool(fidelity_acc.item())
+    tracker.prob.append(post_pred_prob.item())
+    tracker.delta_prob.append(original_pred_prob - post_pred_prob.item())
+    tracker.post_input_ids = post_input_ids
+    tracker.post_pred_label = post_pred_label
+    
     tracker.salient_desc_metrics = compute_salient_desc_auc(valid_token_num, input_ids, token_type_ids, attention_mask, special_tokens_mask,
                                                             modified_index_order, original_pred_label, device)
 
@@ -339,8 +389,8 @@ salient_desc_auc = get_salient_desc_auc(all_trackers)
 reslut = {}
 reslut["Eval Example Number"] = len(all_trackers)
 reslut["Attack Success Rate"] = sum([item.if_success for item in all_trackers]) / len(all_trackers)
-reslut["Token Modification Rate"] = np.mean([item.masked_token_rate for item in all_trackers])
-reslut["Token Modification Number"] = np.mean([item.masked_token_num for item in all_trackers])
+reslut["Token Modification Rate"] = np.mean([item.masked_token_rate[-1] for item in all_trackers])
+reslut["Token Modification Number"] = np.mean([item.masked_token_num[-1] for item in all_trackers])
 reslut["Average Model Query Times"] = np.mean([item.done_step for item in all_trackers])
 reslut["Fidelity"] = sum([item.fidelity for item in all_trackers]) / len(all_trackers)
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
@@ -352,6 +402,9 @@ for k, v in reslut.items():
 if config.use_wandb:
     for k, v in reslut.items():
         wandb.run.summary[k] = v
+
+    for tracker in all_trackers:
+        tracker.save_result_row(tokenizer, label_names, wandb_result_table)
 
     # 1. salient_desc_auc mask_token_num_pred_probs_auc_score curve
     key = "mask_token_num_pred_probs_auc_score"

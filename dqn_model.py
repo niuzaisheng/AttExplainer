@@ -245,8 +245,8 @@ class DQN(object):
 
         if self.token_replacement_strategy == "mask":
             next_game_status = game_status.clone()
-            for i, position in enumerate(select_action):
-                if game_status[i, position] == 0:
+            for i, position in enumerate(select_action): 
+                if game_status[i, position] == 0: # filp the game status in select position
                     next_game_status[i, position] = 1
                 else:
                     next_game_status[i, position] = 0
@@ -290,7 +290,7 @@ class DQN(object):
     def initial_action(self, batch, special_tokens_mask, seq_length, batch_max_seq_length, device):
         batch_size = len(seq_length)
         actions = torch.zeros((batch_size, batch_max_seq_length))
-        game_status = torch.ones((batch_size, batch_max_seq_length))
+        game_status = torch.ones((batch_size, batch_max_seq_length)) # 1 is visible to the model, 0 is invisible to the model.
         for i, index in enumerate(seq_length):
             game_status[i, index:] = 0
         return actions.to(device), game_status.to(device)
