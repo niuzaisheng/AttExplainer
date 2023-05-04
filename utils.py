@@ -653,6 +653,7 @@ def get_most_free_gpu_index():
     return gpu_usage.index(min(gpu_usage))
 
 
+
 class GameEnvironmentVariables(NamedTuple):
 
     rewards: Tensor
@@ -726,6 +727,7 @@ class TokenModifyTracker:
         self.modified_order_metrics = None
         self.post_input_ids = None
         self.post_pred_label = None
+        self.post_game_status = None
 
     @property
     def valid_token_num(self):
@@ -797,7 +799,20 @@ class TokenModifyTracker:
                 saliency[token_index] = last_prob - prob
                 last_prob = prob
             return [saliency[i] for i in range(self.original_seq_length)]
-        
+
+    @property
+    def word_masked_rate(self):
+        # NOTE: Here is a rough way of estimation, because the mask occurs at token level, not word level. But here it is seen as breaking the whole word.
+        if self.post_game_status is None:
+            logger.warning("post_game_status is None, can't calculate word_masked_rate!")
+            return None
+        word_num = len(set(self.token_word_position_map.values())) - self.token_quantity_correction
+        masked_word_index = set()
+        for i in range(self.original_seq_length):
+            if self.post_game_status[i] == 0:
+                masked_word_index.add(self.token_word_position_map[i])
+        return len(masked_word_index) / word_num
+
     def set_token_saliency(self, token_saliency):
         if isinstance(token_saliency, np.ndarray):
             token_saliency = token_saliency.tolist()
@@ -821,6 +836,7 @@ class TokenModifyTracker:
                                         self.modified_index_order, self.prob, self.rewards, self.delta_prob, self.token_saliency,
                                         self.masked_token_rate, self.masked_token_num,
                                         self.fidelity, original_input_ids, post_input_ids)
+
 
 
 def create_result_table(mode="test"):

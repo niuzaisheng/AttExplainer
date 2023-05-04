@@ -40,18 +40,32 @@
 #     python analysis_add_tracker.py --data_set_name sst2 --task_type explain --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-03-27-11-03-22/dqn-400000.bin --disable_tqdm
 # }
 
-# export CUDA_VISIBLE_DEVICES=0
-# group1 > logs/emotion_analysis_add_tracker.out &
-# export CUDA_VISIBLE_DEVICES=3
-# group2 > logs/snli_analysis_add_tracker.out &
 # export CUDA_VISIBLE_DEVICES=1
+# group1 > logs/emotion_analysis_add_tracker.out &
+# export CUDA_VISIBLE_DEVICES=2
+# group2 > logs/snli_analysis_add_tracker.out &
+# export CUDA_VISIBLE_DEVICES=3
 # group3 > logs/sst2_analysis_add_tracker.out &
 
+group4(){
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type const --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-06-11-30-25/dqn-200000.bin --disable_tqdm &
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type random --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-06-11-31-54/dqn-200000.bin --disable_tqdm
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-28-06-41-36/dqn-200000.bin --disable_tqdm &
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-30-04-32-32/dqn-200000.bin --disable_tqdm
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-09-04-04-27-22/dqn-200000.bin --disable_tqdm &
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-17-05-29-36/dqn-200000.bin --disable_tqdm 
+    python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-19-07-47-51/dqn-200000.bin --disable_tqdm &
+    # python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-19-07-47-51/dqn-200000.bin --disable_tqdm
+}
+
+export CUDA_VISIBLE_DEVICES=1
+group4 > logs/emotion_analysis_add_tracker_attack.out
 
 # Part 2: Explain baseline methods
 
 func() {
-    for j in FeatureAblation Occlusion LIME KernelShap ShapleyValueSampling IntegratedGradients DeepLift
+    # for j in FeatureAblation Occlusion LIME KernelShap ShapleyValueSampling IntegratedGradients DeepLift
+    for j in IntegratedGradients DeepLift
     do
         echo "running $1 $j"
         if [ $j = "ShapleyValueSampling" ]
@@ -71,12 +85,12 @@ func() {
     done
 }
 
-export CUDA_VISIBLE_DEVICES=0
-func "emotion" > logs/emotion-3.out &
-export CUDA_VISIBLE_DEVICES=2
-func "sst2" > logs/sst2-3.out &
-export CUDA_VISIBLE_DEVICES=2
-func "snli" > logs/snli-4.out &
+# export CUDA_VISIBLE_DEVICES=1
+# func "emotion" > logs/emotion-3.out &
+# export CUDA_VISIBLE_DEVICES=0
+# func "sst2" > logs/sst2-3.out &
+# export CUDA_VISIBLE_DEVICES=1
+# func "snli" > logs/snli-4.out &
 
 echo "All jobs started! Wait for all jobs to finish"
 wait

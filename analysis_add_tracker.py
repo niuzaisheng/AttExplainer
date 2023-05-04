@@ -12,8 +12,7 @@ from accelerate.utils import send_to_device
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, set_seed
 
-from data_utils import (get_dataloader_and_model, get_dataset_config,
-                        get_word_masked_rate)
+from data_utils import get_dataloader_and_model, get_dataset_config
 from dqn_model import DQN
 from utils import *
 
@@ -54,7 +53,8 @@ def parse_args():
     parser.add_argument("--wandb_project_name", type=str, default="attexplainer-dev")
     parser.add_argument("--disable_tqdm", action="store_true", default=False)
     parser.add_argument("--discribe", type=str, default="Model evaluation process")
-
+    parser.add_argument("--debug", action="store_true", default=False, help="Debug mode, only run 10 examples.")
+    
     args = parser.parse_args()
     return args
 
@@ -68,6 +68,8 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger.info(f"Eval config: {config}")
+if config.debug: logger.warning("In debug mode, only run 10 samples")
+
 set_seed(config.seed)
 lm_device = torch.device("cuda", config.gpu_index)
 
@@ -98,7 +100,7 @@ logger.info("Finish loading!")
 def get_rewards(original_seq_length=None,
                 original_acc=None, original_prob=None, original_logits=None, original_loss=None,
                 post_acc=None, post_prob=None, post_logits=None, post_loss=None,
-                game_status=None, game_step=None):
+                game_status=None, game_step=None, repeat_action_flag=None):
 
     valid_token_num = torch.FloatTensor(original_seq_length) - token_quantity_correction
     valid_token_num, game_status = keep_tensor_in_same_device(valid_token_num, game_status, device="cpu")
@@ -131,6 +133,9 @@ def get_rewards(original_seq_length=None,
     for i in range(unmask_token_num.size(0)):
         # mask all tokens in one example will be treated as done
         if unmask_token_num[i] == 0:
+            if_done[i] = 1
+        # repeat_action_flag[i] == 1 means the agent has repeated the same action
+        if repeat_action_flag[i] == 1:
             if_done[i] = 1
 
     return GameEnvironmentVariables(
@@ -197,6 +202,7 @@ def record_results(transformer_model, trackers, finished_index, original_batch, 
     for i, batch_index in enumerate(finished_index):
         trackers[batch_index].fidelity = bool(fidelity_acc[i].item())
         trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
+        trackers[batch_index].post_game_status = game_status[i]
 
         compute_salient_desc_auc(transformer_model, trackers[batch_index],
                                  original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
@@ -225,8 +231,9 @@ game_step_progress_bar = tqdm(desc="game_step", total=epoch_game_steps, disable=
 
 for step, batch in enumerate(eval_dataloader):
 
-    # if step == 3: # for debug
-    #     break
+    if config.debug and step == 10: # debug
+        logger.warning("In debug mode, only run 10 samples")
+        break
 
     seq_length = batch.pop("seq_length")
     if batch.get("id") is not None:
@@ -268,13 +275,13 @@ for step, batch in enumerate(eval_dataloader):
         game_step_progress_bar.update()
         game_step_progress_bar.set_postfix({"left_examples": batch_size})
 
-        post_batch, actions, next_game_status, next_special_tokens_mask = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status)
+        post_batch, actions, next_game_status, next_special_tokens_mask, repeat_action_flag = dqn.choose_action(batch, seq_length, special_tokens_mask, now_features, now_game_status, return_repeat_action_flag=True)
         next_features, post_acc, post_pred_labels, post_prob, post_logits, post_loss = one_step(transformer_model, original_pred_labels, post_batch, seq_length, config,
                                                                                                 lm_device=lm_device, dqn_device=dqn.device)
         r = get_rewards(original_seq_length,
                         original_acc, original_prob, original_logits, original_loss,
                         post_acc, post_prob, post_logits, post_loss,
-                        next_game_status, game_step)
+                        next_game_status, game_step, repeat_action_flag)
 
         update_trackers(trackers, variables=r, action=actions, post_prob=post_prob, post_pred_label=post_pred_labels.view(-1))
 
@@ -311,8 +318,7 @@ reslut["Average Eval Token Length"] = np.mean([item.original_seq_length for item
 reslut["Attack Success Rate"] = sum([1 for item in all_trackers if item.if_success]) / len(all_trackers)
 reslut["Token Modification Rate"] = np.mean([item.masked_token_rate[-1] for item in all_trackers])
 reslut["Token Modification Number"] = np.mean([item.masked_token_num[-1] for item in all_trackers])
-# reslut["Word Modification Rate"] = np.mean(all_masked_word_rate)
-# reslut["Word Left Rate"] = np.mean(all_unmasked_token_rate)
+reslut["Word Modification Rate"] = np.mean([item.word_masked_rate for item in all_trackers])
 reslut["Average Victim Model Query Times"] = np.mean([item.done_step for item in all_trackers])
 reslut["Fidelity"] = np.mean([item.fidelity for item in all_trackers])
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])

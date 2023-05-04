@@ -62,6 +62,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger.info(f"Eval config: {config}")
+if config.debug: logger.warning("In debug mode, only run 10 samples")
 
 dataset_config = get_dataset_config(config)
 problem_type = dataset_config["problem_type"]
@@ -244,7 +245,8 @@ def compute_fidelity_when_masked(original_model, original_batch, special_tokens_
 
 for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=config.disable_tqdm):
 
-    if config.debug and i >= 10:
+    if config.debug and i == 10:
+        logger.warning("In debug mode, only run 10 samples")
         break
 
     example_id = item["id"]
@@ -330,7 +332,7 @@ for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=co
                                       n_steps=config.max_sample_num,
                                       additional_forward_args=(token_type_ids, attention_mask, step_tracker, True))
         summarize_res = summarize_res.sum(dim=-1)
-        summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
+        # summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
         summarize_res = summarize_res.detach().cpu()
 
     elif config.explain_method == "DeepLift":
@@ -350,7 +352,7 @@ for i, item in tqdm(enumerate(eval_dataset), total=len(eval_dataset), disable=co
         forward_handle.remove()
 
         summarize_res = summarize_res.sum(dim=-1)
-        summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
+        # summarize_res = summarize_res / torch.norm(summarize_res, dim=-1, keepdim=True)
         summarize_res = summarize_res.detach().cpu()
 
     else:

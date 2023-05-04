@@ -231,23 +231,26 @@ class DQN(object):
 
         return select_action
 
-    def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status):
+    def choose_action(self, batch, batch_seq_length, special_tokens_mask, now_features, game_status, return_repeat_action_flag=False):
         target_device = batch["input_ids"].device
         self.eval_net.eval()
         now_features = send_to_device(now_features, self.device)
         game_status = send_to_device(game_status, self.device)
         special_tokens_mask = send_to_device(special_tokens_mask, self.device)
-
+    
         with torch.no_grad():
             actions = self.eval_net(now_features, game_status).detach()
 
         select_action = self.select_action_by_policy(actions, batch_seq_length, special_tokens_mask, not self.do_eval)
+        if return_repeat_action_flag: # if the agent choose a position that has been selected, the repeat_action_flag will be set to True
+            repeat_action_flag = torch.zeros_like(select_action).bool()
 
         if self.token_replacement_strategy == "mask":
             next_game_status = game_status.clone()
             for i, position in enumerate(select_action): 
                 if game_status[i, position] == 0: # filp the game status in select position
                     next_game_status[i, position] = 1
+                    if return_repeat_action_flag: repeat_action_flag[i] = True
                 else:
                     next_game_status[i, position] = 0
 
@@ -285,7 +288,10 @@ class DQN(object):
             post_batch = {"input_ids": post_input_ids, "attention_mask": post_attention_mask, "token_type_ids": post_token_type_ids}
             next_game_status = post_attention_mask
 
-        return post_batch, select_action, next_game_status, next_special_tokens_mask
+        if return_repeat_action_flag:
+            return post_batch, select_action, next_game_status, next_special_tokens_mask, repeat_action_flag
+        else:
+            return post_batch, select_action, next_game_status, next_special_tokens_mask
 
     def initial_action(self, batch, special_tokens_mask, seq_length, batch_max_seq_length, device):
         batch_size = len(seq_length)
