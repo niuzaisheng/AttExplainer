@@ -549,25 +549,26 @@ def compute_fidelity_when_masked(original_model, finished_index, original_batch,
     return fidelity_plus_acc
 
 
-def compute_fidelity_when_deleted(original_model, finished_index, batch, special_tokens_mask,
+def compute_fidelity_when_deleted(original_model, finished_index, deleted_batch, special_tokens_mask,
                                   game_status, original_pred_labels, lm_device):
 
     fidelity_plus_batch = {}
-    for key in batch.keys():
-        fidelity_plus_batch[key] = batch[key][finished_index]
+    for key in deleted_batch.keys():
+        fidelity_plus_batch[key] = deleted_batch[key][finished_index].clone()
+    fidelity_plus_batch = send_to_device(fidelity_plus_batch, lm_device)
 
-    finish_game_status = game_status[finished_index]
-    finish_special_tokens_mask = special_tokens_mask[finished_index]
-    finish_special_tokens_mask = send_to_device(finish_special_tokens_mask, finish_game_status.device)
+    # finish_game_status = game_status[finished_index]
+    # finish_special_tokens_mask = special_tokens_mask[finished_index]
+    # finish_special_tokens_mask = send_to_device(finish_special_tokens_mask, finish_game_status.device)
     finish_original_pred_labels = original_pred_labels[finished_index]
 
-    fidelity_plus_mask = ~finish_game_status.bool()
-    fidelity_plus_mask = fidelity_plus_mask.masked_fill(finish_special_tokens_mask, False)
-    fidelity_plus_mask = send_to_device(fidelity_plus_mask, lm_device)
+    # fidelity_plus_mask = ~finish_game_status.bool()
+    # fidelity_plus_mask = fidelity_plus_mask.masked_fill(finish_special_tokens_mask, False)
+    # fidelity_plus_mask = send_to_device(fidelity_plus_mask, lm_device)
 
-    fidelity_minus_mask = finish_game_status.bool()
-    fidelity_minus_mask = fidelity_minus_mask.masked_fill(finish_special_tokens_mask, False)
-    fidelity_minus_mask = send_to_device(fidelity_minus_mask, lm_device)
+    # fidelity_minus_mask = finish_game_status.bool()
+    # fidelity_minus_mask = fidelity_minus_mask.masked_fill(finish_special_tokens_mask, False)
+    # fidelity_minus_mask = send_to_device(fidelity_minus_mask, lm_device)
 
     with torch.no_grad():
         fidelity_plus_outputs = original_model(**fidelity_plus_batch)
@@ -667,7 +668,7 @@ class GameEnvironmentVariables(NamedTuple):
     delta_logits: Tensor
     delta_loss: Tensor
 
-
+removed_special_tokens = ["[PAD]", "[UNK]", "[CLS]", "[SEP]"]
 
 # TokenModifyTracker and assist tracking functions
 class TokenModifyTracker:
@@ -803,16 +804,73 @@ class TokenModifyTracker:
     @property
     def word_masked_rate(self):
         # NOTE: Here is a rough way of estimation, because the mask occurs at token level, not word level. But here it is seen as breaking the whole word.
-        if self.post_game_status is None:
-            logger.warning("post_game_status is None, can't calculate word_masked_rate!")
-            return None
+        # if self.post_game_status is None:
+        #     logger.warning("post_game_status is None, can't calculate word_masked_rate!")
+        #     return None
+        # word_num = len(set(self.token_word_position_map.values())) - self.token_quantity_correction
+        # masked_word_index = set()
+        # for i in range(self.original_seq_length):
+        #     if self.post_game_status[i] == 0:
+        #         masked_word_index.add(self.token_word_position_map[i])
+        # return len(masked_word_index) / word_num
         word_num = len(set(self.token_word_position_map.values())) - self.token_quantity_correction
         masked_word_index = set()
-        for i in range(self.original_seq_length):
-            if self.post_game_status[i] == 0:
-                masked_word_index.add(self.token_word_position_map[i])
+        for i in self.modified_index_order:
+            masked_word_index.add(self.token_word_position_map[i])
         return len(masked_word_index) / word_num
 
+    # def get_openattack_word_masked_rate(self, tokenizer):
+    #     """
+    #         Copy from OpenAttack 
+    #         OpenAttack/metric/algorithms/modification.py
+    #     """
+
+    #     original_input = self.input_ids.tolist()
+    #     adversarial_input = self.post_input_ids.tolist()
+    #     original_input = tokenizer.convert_ids_to_tokens(original_input)
+    #     adversarial_input = tokenizer.convert_ids_to_tokens(adversarial_input)
+    #     original_input = [t for t in original_input if t not in removed_special_tokens]
+    #     adversarial_input = [t for t in adversarial_input if t not in removed_special_tokens]
+    #     va = original_input
+    #     vb = adversarial_input
+    #     ret = 0
+    #     if len(va) != len(vb):
+    #         ret = abs(len(va) - len(vb))
+    #     mn_len = min(len(va), len(vb))
+    #     va, vb = va[:mn_len], vb[:mn_len]
+    #     for wordA, wordB in zip(va, vb):
+    #         if wordA != wordB:
+    #             ret += 1
+    #     return ret / len(original_input)
+
+    def edit_distance(self, tokenizer) -> int:
+        """
+            Modified from OpenAttack
+            OpenAttack/metric/selectors/edit_distance.py
+        """
+        original_input = self.input_ids.tolist()
+        adversarial_input = self.post_input_ids.tolist()
+        original_input = tokenizer.convert_ids_to_tokens(original_input)
+        adversarial_input = tokenizer.convert_ids_to_tokens(adversarial_input)
+        original_input = [t for t in original_input if t not in removed_special_tokens]
+        adversarial_input = [t for t in adversarial_input if t not in removed_special_tokens]
+        a = original_input
+        b = adversarial_input
+        la = len(a)
+        lb = len(b)
+        f = torch.zeros(la + 1, lb + 1, dtype=torch.long)
+        for i in range(la + 1):
+            for j in range(lb + 1):
+                if i == 0:
+                    f[i][j] = j
+                elif j == 0:
+                    f[i][j] = i
+                elif a[i - 1] == b[j - 1]:
+                    f[i][j] = f[i - 1][j - 1]
+                else:
+                    f[i][j] = min(f[i - 1][j - 1], f[i - 1][j], f[i][j - 1]) + 1
+        return f[la][lb].item()
+    
     def set_token_saliency(self, token_saliency):
         if isinstance(token_saliency, np.ndarray):
             token_saliency = token_saliency.tolist()

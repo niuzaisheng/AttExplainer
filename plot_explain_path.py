@@ -21,8 +21,7 @@ from accelerate.utils import send_to_device
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, set_seed
 
-from data_utils import (get_dataloader_and_model, get_dataset_config,
-                        get_word_masked_rate)
+from data_utils import get_dataloader_and_model, get_dataset_config
 
 # %%
 from dqn_model import DQN

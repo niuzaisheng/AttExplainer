@@ -153,10 +153,10 @@ def get_rewards(original_seq_length=None,
 
     if config.task_type == "attack":
         if_success = torch.logical_xor(original_acc.bool(), post_acc.bool()).float()
-        # rewards = delta_prob + 10 * if_success * unmasked_token_rate
+        rewards = delta_prob + 10 * if_success * unmasked_token_rate # default reward setting
         # rewards = delta_prob + 10 * if_success # ablation study
         # rewards = 10 * if_success * unmasked_token_rate # ablation study
-        rewards = delta_prob # ablation study
+        # rewards = delta_prob # ablation study
 
     elif config.task_type == "explain":
         if_success = (delta_prob >= config.done_threshold).float()

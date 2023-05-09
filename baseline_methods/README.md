@@ -15,6 +15,7 @@ You can add an argument `--max_sample_num` when using `KernelShap`,`ShapleyValue
 ## For Adversarial Attack
 
 The website of OpenAttack toolkit is https://github.com/thunlp/OpenAttack . We use it for evaluating all baseline methods in text adversarial attack task.
+You need add a JAVAHOME in your environment variables.
 
     python baseline_methods/attack_baseline_openattack.py --data_set_name emotion --max_sample_num 100
 

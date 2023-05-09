@@ -71,7 +71,7 @@ logger.info(f"Eval config: {config}")
 if config.debug: logger.warning("In debug mode, only run 10 samples")
 
 set_seed(config.seed)
-lm_device = torch.device("cuda", config.gpu_index)
+lm_device = torch.device("cuda")
 
 dataset_config = get_dataset_config(config)
 num_labels = dataset_config["num_labels"]
@@ -196,7 +196,7 @@ def record_results(transformer_model, trackers, finished_index, original_batch, 
                                                        special_tokens_mask, game_status, original_pred_labels, lm_device, mask_token_id=MASK_TOKEN_ID)
 
     elif config.token_replacement_strategy == "delete":
-        fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, original_batch,
+        fidelity_acc = compute_fidelity_when_deleted(transformer_model, finished_index, post_batch,
                                                      special_tokens_mask, game_status, original_pred_labels, lm_device)
 
     for i, batch_index in enumerate(finished_index):
@@ -204,11 +204,12 @@ def record_results(transformer_model, trackers, finished_index, original_batch, 
         trackers[batch_index].post_input_ids = post_batch["input_ids"][batch_index]
         trackers[batch_index].post_game_status = game_status[i]
 
-        compute_salient_desc_auc(transformer_model, trackers[batch_index],
+        if config.token_replacement_strategy == "mask":
+            compute_salient_desc_auc(transformer_model, trackers[batch_index],
                                  original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
                                  lm_device, MASK_TOKEN_ID)
         
-        compute_modified_order_auc(transformer_model, trackers[batch_index],
+            compute_modified_order_auc(transformer_model, trackers[batch_index],
                                     original_batch["input_ids"][[batch_index]], original_batch["token_type_ids"][[batch_index]], original_batch["attention_mask"][[batch_index]], special_tokens_mask[[batch_index]],
                                     lm_device, MASK_TOKEN_ID)
 
@@ -261,7 +262,7 @@ for step, batch in enumerate(eval_dataloader):
 
     progress_bar.update(1)
     game_step_progress_bar.reset()
-    trackers = create_trackers(ids, seq_length, batch["input_ids"], token_word_position_map,
+    trackers = create_trackers(ids, seq_length, original_batch["input_ids"], token_word_position_map,
                                golden_labels, original_acc, original_pred_labels, original_prob, original_logits, original_loss,
                                token_quantity_correction, config.token_replacement_strategy)
     all_trackers.extend(trackers)
@@ -317,11 +318,17 @@ reslut["Eval Example Number"] = len(all_trackers)
 reslut["Average Eval Token Length"] = np.mean([item.original_seq_length for item in all_trackers])
 reslut["Attack Success Rate"] = sum([1 for item in all_trackers if item.if_success]) / len(all_trackers)
 reslut["Token Modification Rate"] = np.mean([item.masked_token_rate[-1] for item in all_trackers])
+reslut["Token Modification Rate(success)"] = np.mean([item.masked_token_rate[-1] for item in all_trackers if item.if_success])
 reslut["Token Modification Number"] = np.mean([item.masked_token_num[-1] for item in all_trackers])
+reslut["Token Modification Number(success)"] = np.mean([item.masked_token_num[-1] for item in all_trackers if item.if_success])
 reslut["Word Modification Rate"] = np.mean([item.word_masked_rate for item in all_trackers])
+reslut["Word Modification Rate(success)"] = np.mean([item.word_masked_rate for item in all_trackers if item.if_success])
+reslut["Edit Distance"] = np.mean([item.edit_distance(tokenizer) for item in all_trackers])
+reslut["Edit Distance(success)"] = np.mean([item.edit_distance(tokenizer) for item in all_trackers if item.if_success])
 reslut["Average Victim Model Query Times"] = np.mean([item.done_step for item in all_trackers])
 reslut["Fidelity"] = np.mean([item.fidelity for item in all_trackers])
 reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
+reslut["delta_prob(success)"] = np.mean([item.delta_prob[-1] for item in all_trackers if item.if_success])
 
 """
     Here, we compute two kind of auc scores:
@@ -346,8 +353,9 @@ reslut["delta_prob"] = np.mean([item.delta_prob[-1] for item in all_trackers])
     and attack.
 """
 
-modified_order_auc = get_modified_order_auc(all_trackers)
-salient_desc_auc = get_salient_desc_auc(all_trackers)
+if config.token_replacement_strategy == "mask":
+    modified_order_auc = get_modified_order_auc(all_trackers)
+    salient_desc_auc = get_salient_desc_auc(all_trackers)
 
 logger.info(f"Result")
 for k, v in reslut.items():
@@ -405,31 +413,30 @@ if config.use_wandb:
     wandb.log({"trade_off7": wandb.plot.scatter(table7, "done_step", "delta_prob", title="Delta Prob & Done Step Trade Off")})
 
     # The auc curves
+    if config.token_replacement_strategy == "mask":
+        # 1. modified_order_auc mask_token_num_pred_probs_auc_score curve
+        key = "mask_token_num_pred_probs_auc_score"
+        data = [[step, value] for (step, value) in modified_order_auc[key].items()]
+        table = wandb.Table(data=data, columns=["step", "value"])
+        wandb.log({f"modified_order_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"modified_order {key} Curve")})
 
-    # 1. modified_order_auc mask_token_num_pred_probs_auc_score curve
-    key = "mask_token_num_pred_probs_auc_score"
-    data = [[step, value] for (step, value) in modified_order_auc[key].items()]
-    table = wandb.Table(data=data, columns=["step", "value"])
-    wandb.log({f"modified_order_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"modified_order {key} Curve")})
+        # 2. modified_order_auc mask_ratio_pred_probs_auc_score curve
+        key = "mask_ratio_pred_probs_auc_score"
+        data = [[step, value] for (step, value) in modified_order_auc[key].items()]
+        table = wandb.Table(data=data, columns=["step", "value"])
+        wandb.log({f"modified_order_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"modified_order {key} Curve")})
 
-    # 2. modified_order_auc mask_ratio_pred_probs_auc_score curve
-    key = "mask_ratio_pred_probs_auc_score"
-    data = [[step, value] for (step, value) in modified_order_auc[key].items()]
-    table = wandb.Table(data=data, columns=["step", "value"])
-    wandb.log({f"modified_order_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"modified_order {key} Curve")})
+        # 3. salient_desc_auc mask_token_num_pred_probs_auc_score curve
+        key = "mask_token_num_pred_probs_auc_score"
+        data = [[step, value] for (step, value) in salient_desc_auc[key].items()]
+        table = wandb.Table(data=data, columns=["step", "value"])
+        wandb.log({f"salient_desc_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"salient_desc {key} Curve")})
 
-    # 3. salient_desc_auc mask_token_num_pred_probs_auc_score curve
-    key = "mask_token_num_pred_probs_auc_score"
-    data = [[step, value] for (step, value) in salient_desc_auc[key].items()]
-    table = wandb.Table(data=data, columns=["step", "value"])
-    wandb.log({f"salient_desc_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"salient_desc {key} Curve")})
-
-    # 4. salient_desc_auc mask_ratio_pred_probs_auc_score curve
-    key = "mask_ratio_pred_probs_auc_score"
-    data = [[step, value] for (step, value) in salient_desc_auc[key].items()]
-    table = wandb.Table(data=data, columns=["step", "value"])
-    wandb.log({f"salient_desc_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"salient_desc {key} Curve")})
-
+        # 4. salient_desc_auc mask_ratio_pred_probs_auc_score curve
+        key = "mask_ratio_pred_probs_auc_score"
+        data = [[step, value] for (step, value) in salient_desc_auc[key].items()]
+        table = wandb.Table(data=data, columns=["step", "value"])
+        wandb.log({f"salient_desc_{key}_curve": wandb.plot.scatter(table, "step", "value", title=f"salient_desc {key} Curve")})
 
     wandb.log({"input_ids": wandb_result_table})
     wandb.finish()

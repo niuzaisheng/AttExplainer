@@ -57,8 +57,6 @@ logger.info("Start loading!")
 transformer_model, _, eval_dataset = get_dataset_and_model(config, dataset_config, tokenizer)
 logger.info("Finish loading!")
 
-
-
 class NLIWrapper(oa.classifiers.Classifier):
     def __init__(self, model: oa.classifiers.Classifier):
         self.model = model
@@ -81,6 +79,11 @@ if config.data_set_name == "snli":
         # tokens = tokenizer.convert_ids_to_tokens(ids)
         # example["x"] = " ".join(tokens)
         example["x"] = "[CLS] " + example["premise"] + " [SEP] " + example["hypothesis"] + " [SEP]" 
+        return example
+    eval_dataset = eval_dataset.map(rename_column)
+elif config.data_set_name == "sst2":
+    def rename_column(example):
+        example["x"] = example["sentence"]
         return example
     eval_dataset = eval_dataset.map(rename_column)
 else:
@@ -132,7 +135,7 @@ class TokenModification(AttackMetric):
         for wordA, wordB in zip(va, vb):
             if wordA != wordB:
                 ret += 1
-        return ret / len(va)
+        return ret / len(tokenA)
     
     def after_attack(self, input, adversarial_sample):
         if adversarial_sample is not None:
@@ -142,6 +145,28 @@ class TokenModification(AttackMetric):
             x = [t for t in x if t not in TokenModification.removed_special_tokens]
             y = [t for t in y if t not in TokenModification.removed_special_tokens]
             return self.calc_score(x, y)
+
+        return None
+
+class DeltaProb(AttackMetric):
+    
+    NAME = "Delta Prob"
+    
+    def __init__(self, tokenizer, victim):
+        self.tokenizer = tokenizer
+        self.victim = victim
+    
+    def after_attack(self, input, adversarial_sample):
+
+        if adversarial_sample is not None:
+            original_input = input["x"]
+            adversarial_input = adversarial_sample
+            original_label_id = input["label"]
+            res = self.victim.get_prob([original_input, adversarial_input])
+            delte_p = res[0][original_label_id] - res[1][original_label_id]
+            return delte_p
+        
+        return None
 
 
 # prepare for attacking
@@ -159,6 +184,7 @@ for attacker in attacker_list:
                                     oa.metric.EditDistance(),
                                     oa.metric.ModificationRate(), # Word Modification Rate
                                     TokenModification(tokenizer), # Token Modification Rate
+                                    DeltaProb(tokenizer, victim) # Delta Prob
                                 ],
                                 invoke_limit=config.max_sample_num)
 

@@ -28,21 +28,6 @@ def get_token_word_position_map(batch, tokenizer):
     return res
 
 
-def get_word_masked_rate(batch_game_status, seq_length, batch_word_offset_maps):
-    assert len(batch_game_status) == len(seq_length) == len(batch_word_offset_maps)
-    batch_word_masked_rate = []
-    for game_status, token_seq_length, word_offset_maps in zip(batch_game_status, seq_length, batch_word_offset_maps):
-        word_num = len(set(word_offset_maps.values()))
-        # word_num = word_offset_maps[token_seq_length]
-        masked_word_index = set()
-        for i in range(token_seq_length):
-            if game_status[i] == 0:
-                masked_word_index.add(word_offset_maps[i])
-        batch_word_masked_rate.append(len(masked_word_index)/word_num)
-
-    return batch_word_masked_rate
-
-
 def single_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name="text"):
 
     first = features[0]

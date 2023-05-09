@@ -103,7 +103,29 @@ class DQNNetEmbedding(nn.Module):
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
 
+# class DQNNetMixture(nn.Module):
+#     def __init__(self, config):
+#         super().__init__()
+#         # input: [batch_size, seq_len, 2 * model_rep_dim + bins_num * 2 + 4]
+#         self.bins_num = config.bins_num
+#         self.layer1 = nn.Linear(2 * 768 + self.bins_num * 2 + 4, 64)
+#         self.layer2 = nn.Linear(64, 8)
+#         self.out = nn.Linear(8+1, 1)
+
+#     def forward(self, x, s):
+#         batch_size, _, max_seq_len, dim = x.size()  # [B, 1, seq, dim]
+#         x = x.reshape(batch_size, max_seq_len, dim)  # [B, seq, dim]
+#         x = self.layer1(x)  # [B, seq, 64]
+#         x = torch.relu(x)
+#         x = self.layer2(x)  # [B, seq, 8]
+#         x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
+#         x = self.out(x)  # [B, seq, 1]
+#         return x.reshape(batch_size, max_seq_len)  # [B , seq]
+
 class DQNNetMixture(nn.Module):
+    """
+        Add dropout to the network
+    """
     def __init__(self, config):
         super().__init__()
         # input: [batch_size, seq_len, 2 * model_rep_dim + bins_num * 2 + 4]
@@ -111,16 +133,20 @@ class DQNNetMixture(nn.Module):
         self.layer1 = nn.Linear( 2 * 768 + self.bins_num * 2 + 4, 64)
         self.layer2 = nn.Linear(64, 8)
         self.out = nn.Linear(8+1, 1)
+        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x, s):
+        # Add dropout to the network
         batch_size, _, max_seq_len, dim = x.size()  # [B, 1, seq, dim]
         x = x.reshape(batch_size, max_seq_len, dim)  # [B, seq, dim]
         x = self.layer1(x)  # [B, seq, 64]
         x = torch.relu(x)
+        x = self.dropout(x)
         x = self.layer2(x)  # [B, seq, 8]
         x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, 9]
         x = self.out(x)  # [B, seq, 1]
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
+    
 
 def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
     """
