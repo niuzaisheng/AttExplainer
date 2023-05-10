@@ -189,10 +189,9 @@ for attacker in attacker_list:
                                 invoke_limit=config.max_sample_num)
 
     result = attack_eval.eval(eval_dataset, visualize=False)
+    result["Method"] = attacker.__class__.__name__
 
     print(result)
-    f.writelines(str(attacker.__class__.__name__)+"\n")
     f.writelines(str(result))
-    f.writelines("\n----------\n")
 
 f.close()
