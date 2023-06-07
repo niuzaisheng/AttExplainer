@@ -51,7 +51,7 @@
 
 # group4(){
 #     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2023-05-05-01-33-36/dqn-200000.bin --disable_tqdm
-#     # 在补 original-embedding 实验 emotion_2023-05-05-09-16-26(在跑)
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type original_embedding --use_wandb --token_replacement_strategy delete --use_ddqn --dqn_weights_path saved_weights/emotion_2023-05-05-09-16-26/dqn-200000.bin --disable_tqdm
 #     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy delete --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-19-09-04-14/dqn-200000.bin --disable_tqdm
 #     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-07-07-56-44/dqn-200000.bin --disable_tqdm
 #     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-06-04-47-21/dqn-200000.bin --disable_tqdm
@@ -87,7 +87,20 @@
 # }
 # group6 > logs/emotion_analysis_add_tracker_delete_attack.out
 
-# group7(){
+group7(){ 
+    # snli attack mask 
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-05-28/dqn-200000.bin 
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-08-18/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-11-17/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-14-24/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-15-34/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-16-57/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-03-27-11-11-24/dqn-200000.bin
+}
+group7 > logs/snli_analysis_add_tracker_mask_attack.out
+
+# group8(){
+#     # snli attack delete
 #     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-16/dqn-200000.bin  --disable_tqdm &
 #     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-37/dqn-200000.bin  --disable_tqdm 
 #     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-18-20/dqn-200000.bin  --disable_tqdm & 
@@ -97,9 +110,21 @@
 #     # （在跑）python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path
 # }
 # export CUDA_VISIBLE_DEVICES=2
-# group7 > logs/snli_analysis_add_tracker_delete_attack.out & 
+# group8 > logs/snli_analysis_add_tracker_delete_attack.out & 
 
-# group8(){ 
+group9(){
+    # sst2 attack mask
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-00-53/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-03-02/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-05-33/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-07-57/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-19-25/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-01-55/dqn-200000.bin
+    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-12-09-20-22/dqn-200000.bin 
+}
+group9 > logs/sst2_analysis_add_tracker_mask_attack.out
+
+# group9(){ 
 #     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-23-46/dqn-200000.bin --disable_tqdm & 
 #     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-22-15/dqn-200000.bin --disable_tqdm
 #     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-05-55-15/dqn-200000.bin --disable_tqdm & 
@@ -109,30 +134,30 @@
 #     # （在跑）python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path
 # }
 # export CUDA_VISIBLE_DEVICES=3
-# group8 > logs/sst2_analysis_add_tracker_delete_attack.out
+# group9 > logs/sst2_analysis_add_tracker_delete_attack.out
 
 
 # Part 3: Reward Setting Ablation Analysis
-group9(){ 
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-09-18-41/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-03-42-52/dqn-200000.bin --disable_tqdm 
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-03-39-31/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-17-09-36-46/dqn-200000.bin --disable_tqdm 
+# group9(){ 
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-09-18-41/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-03-42-52/dqn-200000.bin --disable_tqdm 
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-12-12-03-39-31/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/emotion_2022-11-17-09-36-46/dqn-200000.bin --disable_tqdm 
 
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-19-08-35-25/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-12-46-40/dqn-200000.bin --disable_tqdm 
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-12-48-40/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-20-10-56-35/dqn-200000.bin --disable_tqdm 
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-19-08-35-25/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-12-46-40/dqn-200000.bin --disable_tqdm 
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-12-48-40/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type explain --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-20-10-56-35/dqn-200000.bin --disable_tqdm 
     
-    python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-04-04-27-22/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-14-05-58-43/dqn-200000.bin --disable_tqdm 
-    python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-11-14-17/dqn-200000.bin --disable_tqdm &
-    python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-11-16-57/dqn-200000.bin --disable_tqdm 
-}
-export CUDA_VISIBLE_DEVICES=1
-group9 > logs/emotion_analysis_add_tracker_reward_setting_ablation.out
+#     python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-04-04-27-22/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-09-14-05-58-43/dqn-200000.bin --disable_tqdm 
+#     python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-11-14-17/dqn-200000.bin --disable_tqdm &
+#     python analysis_add_tracker.py --data_set_name emotion --task_type attack  --features_type statistical_bin --use_wandb --token_replacement_strategy mask --use_ddqn --dqn_weights_path saved_weights/emotion_2022-12-13-11-16-57/dqn-200000.bin --disable_tqdm 
+# }
+# export CUDA_VISIBLE_DEVICES=1
+# group9 > logs/emotion_analysis_add_tracker_reward_setting_ablation.out
 
-# Part43: Explain baseline methods
+# Part4: Explain baseline methods
 
 # func() {
 #     # for j in FeatureAblation Occlusion LIME KernelShap ShapleyValueSampling IntegratedGradients DeepLift
@@ -163,12 +188,137 @@ group9 > logs/emotion_analysis_add_tracker_reward_setting_ablation.out
 # export CUDA_VISIBLE_DEVICES=1
 # func "snli" > logs/snli-4.out &
 
-
 # Part 4: Attack baseline methods
 # python baseline_methods/attack_baseline_openattack.py --data_set_name emotion --max_sample_num 100
 # python baseline_methods/attack_baseline_openattack.py --data_set_name sst2 --max_sample_num 100
 # python baseline_methods/attack_baseline_openattack.py --data_set_name snli --max_sample_num 100
 
+# Part 5: Transferability study
+
+# group10(){ 
+#     ## Transferability in input_ids-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-10-04-54-29/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-10-04-54-29/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-16/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-16/dqn-200000.bin
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-23-46/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-23-46/dqn-200000.bin
+# }
+
+# group11(){ 
+#     ## Transferability in embedding-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-10-05-03-07/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-10-05-03-07/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-37/dqn-200000.bin 
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-10-08-26-37/dqn-200000.bin 
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-22-15/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-22-15/dqn-200000.bin
+# }
+
+# group12(){ 
+#     ## Transferability in statistical_bin-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-09-04-03-32-14/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-09-04-03-32-14/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-18-20/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-18-20/dqn-200000.bin
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-05-55-15/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-05-55-15/dqn-200000.bin
+# }
+
+# group13(){ 
+#     ## Transferability in effective_information-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-07-07-47-34/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-07-07-47-34/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-20-03/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-20-03/dqn-200000.bin
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-05-57-18/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-05-57-18/dqn-200000.bin
+# }
+
+# group14(){ 
+#     ## Transferability in gradient-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-06-04-44-20/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-12-06-04-44-20/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-22-33/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-22-33/dqn-200000.bin
+#     echo "-sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-06-04-45/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-06-04-45/dqn-200000.bin
+# }
+
+# group15(){ 
+#     ## Transferability in gradient_input-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-11-18-05-45-23/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2022-11-18-05-45-23/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-27-06/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2022-12-08-01-27-06/dqn-200000.bin
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-06-09-11/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-07-06-09-11/dqn-200000.bin
+# }
+
+# group16(){ 
+#     ## Transferability in mixture-attack-delete
+#     echo "emotion->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2023-05-06-09-30-18/dqn-200000.bin
+#     echo "emotion->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/emotion_2023-05-06-09-30-18/dqn-200000.bin
+#     echo "snli->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2023-05-09-01-02-29/dqn-200000.bin
+#     echo "snli->sst2"
+#         python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/snli_2023-05-09-01-02-29/dqn-200000.bin
+#     echo "sst2->emotion"
+#         python analysis_add_tracker.py --data_set_name emotion --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2023-05-09-01-07-25/dqn-200000.bin
+#     echo "sst2->snli"
+#         python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2023-05-09-01-07-25/dqn-200000.bin
+# }
+
+# group10 > logs/reproduction_transferability_group10.log 2>&1 &
+# group11 > logs/reproduction_transferability_group11.log 2>&1 &
+# group12 > logs/reproduction_transferability_group12.log 2>&1 &
+# group13 > logs/reproduction_transferability_group13.log 2>&1 &
+# group14 > logs/reproduction_transferability_group14.log 2>&1 &
+# group15 > logs/reproduction_transferability_group15.log 2>&1 &
+# group16 > logs/reproduction_transferability_group16.log 2>&1 &
+
 echo "All jobs started! Wait for all jobs to finish"
 wait
 echo "All jobs finished!"
+
+
+tmux new-session -n snli-attack-gradient3-mask-ddqn snli_2023-05-10-10-15-34
+tmux new-session -n snli-attack-gradient4-mask-ddqn snli_2023-05-10-10-16-57

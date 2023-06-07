@@ -2,6 +2,7 @@
 .vscode
 saved_weights/*
 saved_weights
+saved_results/*
 logs/*
 !**/logs/README.md
 wandb

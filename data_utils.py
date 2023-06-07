@@ -7,6 +7,7 @@ from datasets import load_dataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataloader import DataLoader
 
+import transformers
 from language_model import MyBertForSequenceClassification
 
 
@@ -372,7 +373,11 @@ def get_dataloader_and_model(config, dataset_config, tokenizer, return_simulate_
         adapter_name = teacher_model.load_adapter(config.adapter_name, source="hf")
         teacher_model.set_active_adapters(adapter_name)
 
-    assert teacher_model.config.num_labels == num_labels
+    print("teacher model loaded")
+    if hasattr(teacher_model.config, "prediction_heads"): # for transformers >= 4.0.0
+        assert teacher_model.config.prediction_heads[config.data_set_name]["num_labels"] == num_labels
+    else: # for transformers < 4.0.0
+        assert teacher_model.config.num_labels == num_labels
 
     return teacher_model, simulate_dataloader, eval_dataloader
 
