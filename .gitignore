@@ -19,6 +19,7 @@ test.sh
 test.py
 *.tar.gz
 artifacts/*
+.nfs*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

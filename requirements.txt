@@ -11,3 +11,4 @@ captum
 lime
 ipykernel
 ipywidgets
+scikit-learn-intelex

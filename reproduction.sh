@@ -2,7 +2,7 @@
 # This script is used to reproduce all evaluation results of the paper.
 
 # We will try to assign calculations to different cards and run them in the background.
-# Please feel free to modify the script to fit your own environment. 
+# Please modify the script to fit your own environment. 
 # Expecially the CUDA_VISIBLE_DEVICES and the number of processes run in same time.
 
 # The script is divided into two parts:
@@ -87,17 +87,17 @@
 # }
 # group6 > logs/emotion_analysis_add_tracker_delete_attack.out
 
-group7(){ 
-    # snli attack mask 
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-05-28/dqn-200000.bin 
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-08-18/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-11-17/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-14-24/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-15-34/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-16-57/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-03-27-11-11-24/dqn-200000.bin
-}
-group7 > logs/snli_analysis_add_tracker_mask_attack.out
+# group7(){ 
+#     # snli attack mask 
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-05-28/dqn-200000.bin 
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-08-18/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-11-17/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-14-24/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-15-34/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-05-10-10-16-57/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name snli --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/snli_2023-03-27-11-11-24/dqn-200000.bin
+# }
+# group7 > logs/snli_analysis_add_tracker_mask_attack.out
 
 # group8(){
 #     # snli attack delete
@@ -112,17 +112,17 @@ group7 > logs/snli_analysis_add_tracker_mask_attack.out
 # export CUDA_VISIBLE_DEVICES=2
 # group8 > logs/snli_analysis_add_tracker_delete_attack.out & 
 
-group9(){
-    # sst2 attack mask
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-00-53/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-03-02/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-05-33/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-07-57/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-19-25/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-01-55/dqn-200000.bin
-    python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-12-09-20-22/dqn-200000.bin 
-}
-group9 > logs/sst2_analysis_add_tracker_mask_attack.out
+# group9(){
+#     # sst2 attack mask
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-00-53/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type original_embedding --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-03-02/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type statistical_bin --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-05-33/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type effective_information --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-01-07-57/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-19-25/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type gradient_input --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-10-10-01-55/dqn-200000.bin
+#     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type mixture --use_wandb --token_replacement_strategy mask --dqn_weights_path saved_weights/sst2_2023-05-12-09-20-22/dqn-200000.bin 
+# }
+# group9 > logs/sst2_analysis_add_tracker_mask_attack.out
 
 # group9(){ 
 #     python analysis_add_tracker.py --data_set_name sst2 --task_type attack --features_type input_ids --use_wandb --token_replacement_strategy delete --dqn_weights_path saved_weights/sst2_2022-12-10-08-23-46/dqn-200000.bin --disable_tqdm & 

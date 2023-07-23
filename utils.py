@@ -982,8 +982,10 @@ def get_permutation_mask_matrix(seq_length: int, special_tokens_mask: List[bool]
         num_special_tokens = sum(special_tokens_mask)
     valid_num = seq_length - num_special_tokens
     valid_mask_matrix = np.zeros((2 ** valid_num, valid_num), dtype=np.int64)
+    valid_mask_rate = np.zeros((2 ** valid_num), dtype=np.float32)
     for i in range(2 ** valid_num):
         valid_mask_matrix[i] = [int(x) for x in list(bin(i)[2:].zfill(valid_num))]
+        valid_mask_rate[i] = sum(valid_mask_matrix[i]) / valid_num
     if special_tokens_mask is not None:
         mask_matrix = np.zeros((2 ** valid_num, seq_length), dtype=np.int64)
         i = 0
@@ -995,7 +997,7 @@ def get_permutation_mask_matrix(seq_length: int, special_tokens_mask: List[bool]
                 i += 1
     else:
         mask_matrix = valid_mask_matrix
-    return mask_matrix
+    return mask_matrix, valid_mask_rate
 
 
 class StepTracker:

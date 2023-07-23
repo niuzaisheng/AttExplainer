@@ -29,9 +29,7 @@ def parse_args():
                         choices=["attack", "explain"],
                         help="The type of the task. On of attack or explain.")
 
-    parser.add_argument(
-        "--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2."
-    )
+    parser.add_argument("--data_set_name", type=str, default=None, help="The name of the dataset. On of emotion,snli or sst2.")
     parser.add_argument("--bins_num", type=int, default=32)
     parser.add_argument("--features_type", type=str, default="statistical_bin",
                         choices=["const", "random", "input_ids", "original_embedding",

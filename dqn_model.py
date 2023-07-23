@@ -24,6 +24,7 @@ class DQNNet(nn.Module):
         self.h2 = 63
         self.h3 = 8
         self.layer1 = nn.Linear(self.h1, self.h2)
+        self.dropout = nn.Dropout(0.5)
         self.layer2 = nn.Linear(self.h2 + 1, self.h3)
         self.out = nn.Linear(self.h3, 1)
 
@@ -35,11 +36,11 @@ class DQNNet(nn.Module):
         x = x.reshape(batch_size, max_seq_len, self.h1)  # [B, matrix_num, seq, 8]
         x = self.layer1(x)  # [B, seq, bins_num x 4]
         x = torch.relu(x)
-        x = F.dropout(x)
+        x = self.dropout(x)
         x = torch.cat([x, s.unsqueeze(-1)], dim=-1)  # [B, seq, h2 + 1]
         x = self.layer2(x)
         x = torch.relu(x)
-        x = F.dropout(x)
+        x = self.dropout(x)
         x = self.out(x)
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
 
@@ -242,7 +243,7 @@ class DQN(object):
             self.loss_func = nn.MSELoss(reduce=False)
 
     def select_action_by_policy(self, actions, batch_seq_length, special_tokens_mask, epsilon_greedy=False):
-        actions = actions.masked_fill(special_tokens_mask, -np.inf)
+        actions = actions.masked_fill(special_tokens_mask.bool(), -np.inf)
         if self.use_categorical_policy:
             # categorical policy
             actions = torch.softmax(actions, dim=1)
