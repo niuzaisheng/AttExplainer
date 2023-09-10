@@ -405,7 +405,7 @@ if not config.reuse:
 # For the same input_text, to be sure that the same figure of Perturbation Examples Space, we can reuse the saved results of Step 1, 3 and 4. 
 # So, here we just load the saved results, and combine them for plotting.
 
-# 1. read explain_path
+# 5.1 read explain_path
 data = np.load(f"saved_results/explain_path_{config.features_type}_{config_base64}.npz", allow_pickle=True)
 explain_path_input_text = data["config"][()].input_text
 modified_index_order = data["modified_index_order"]
@@ -416,7 +416,7 @@ explain_path_string = data["explain_path_string"]
 token_saliency = data["token_saliency"]
 original_prob = data["original_prob"]
 
-# 2. read all_permutation_examples
+# 5.2 read all_permutation_examples
 if config.reuse:
     data = np.load(f"saved_results/reprs_{input_text_base64}.npz", allow_pickle=True)
     reprs_input_text = data["config"][()].input_text
@@ -426,7 +426,7 @@ if config.reuse:
     all_label_probs = data["all_label_probs"]
     all_masked_rate = data["all_masked_rate"]
 
-# 3. find the index of explain_path in all_permutation_examples
+# 5.3 find the index of explain_path in all_permutation_examples
 explain_path_index = []
 for i in range(explain_path_len):
     tmp = np.where((all_permutation_examples == explain_path[i]).all(axis=1))
@@ -435,7 +435,7 @@ for i in range(explain_path_len):
     explain_path_index.append(tmp[0][0])
 print("explain_path_index:", explain_path_index)
 
-# 4. read tsne and kmeans result
+# 5.4 read tsne and kmeans result
 if config.reuse:
     data = np.load(f"saved_results/tsne_{input_text_base64}.npz", allow_pickle=True)
     all_output_reprs_tsne = data["all_output_reprs_tsne"]
@@ -494,15 +494,36 @@ plt.savefig(f"saved_results/cluster_dependence_{input_text_base64}.pdf")
 
 # %% Step 7: Plot the Perturbtion Space
 
-
 plt.figure(figsize=(3, 3))
 ax = plt.gca()
 colors = ["edf2fb", "e2eafc", "d7e3fc", "ccdbfd", "c1d3fe", "b6ccfe", "abc4ff"]
 colors = [f"#{i}" for i in colors]
 cmap = mcolors.LinearSegmentedColormap.from_list("n", colors)
 
+
 # color adjust by label_prob, range from 0 to 1
 im = ax.scatter(all_output_reprs_tsne[:, 0], all_output_reprs_tsne[:, 1], c=all_label_probs, cmap=cmap, s=3, vmin=0, vmax=1)
+
+# Add three examples' annotate guidewire point to out of the figure
+# example 1 is all_output_reprs_tsne[0], example 2 is all_output_reprs_tsne[-1], example 3 random select from all_output_reprs_tsne
+# example 1
+
+plt.annotate(" ", xy=(all_output_reprs_tsne[0, 0], all_output_reprs_tsne[0, 1]), xytext=(0, -23), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3'), fontsize=15)
+
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[0]))
+
+# example 2
+plt.annotate(" ", xy=(all_output_reprs_tsne[-1, 0], all_output_reprs_tsne[-1, 1]), xytext=(0, -23), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3'), fontsize=15)
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[-1]))
+# example 3
+random_index = 20000
+print("random_index:", random_index)
+print("all_permutation_examples[random_index]:", all_permutation_examples[random_index])
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[random_index]))
+plt.annotate(" ", xy=(all_output_reprs_tsne[random_index, 0], all_output_reprs_tsne[random_index, 1]), xytext=(10,-10), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3,rad=-1.35'), fontsize=15)
 
 # no sticks in x, y axis
 plt.xticks([])
@@ -525,13 +546,15 @@ cb.set_ticks([0, 0.2, 0.4, 0.6, 0.8, 1])
 # for i in range(n_clusters):
 #     plt.text(cluster_centers[i, 0] - 4, cluster_centers[i, 1] + 4, f"{cluster_name[i]}", ha="center", va="center", color="black", fontsize=15)
 
-# plt.title("Perturbation Example Space")
 
+# plt.title("Perturbation Example Space")
 plt.tight_layout()
 plt.savefig(f"saved_results/perturb_space_{input_text_base64}.png", dpi=300)
 plt.clf()
 
-# # # Plot the Explain Path
+print("finished plot perturb space")
+
+# Plot the Explain Path
 # plt.figure(figsize=(3, 3))
 # colors = ["edf2fb", "e2eafc", "d7e3fc", "ccdbfd", "c1d3fe", "b6ccfe", "abc4ff"]
 # colors = [f"#{i}" for i in colors]
@@ -576,7 +599,7 @@ plt.clf()
 # plt.title(rename_features_type[config.features_type])
 # plt.tight_layout()
 # plt.savefig(f"saved_results/perturb_space_{input_text_base64}_{config.features_type}_{config_base64}.png", dpi=300)
-plt.clf()
+# plt.clf()
 
 
 #%% Step 8: Plot the Perturbtion Space by masked rate
@@ -588,6 +611,24 @@ colors = [f"#{i}" for i in colors]
 cmap = mcolors.LinearSegmentedColormap.from_list("n", colors)
 
 im = plt.scatter(all_output_reprs_tsne[:, 0], all_output_reprs_tsne[:, 1], c=all_masked_rate, cmap=cmap, s=3, vmin=0, vmax=1)
+
+# Add three examples' annotate guidewire point to out of the figure
+# example 1 is all_output_reprs_tsne[0], example 2 is all_output_reprs_tsne[-1], example 3 random select from all_output_reprs_tsne
+# example 1
+plt.annotate(" ", xy=(all_output_reprs_tsne[0, 0], all_output_reprs_tsne[0, 1]), xytext=(0, -23), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3'), fontsize=15)
+
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[0]))
+
+# example 2
+plt.annotate(" ", xy=(all_output_reprs_tsne[-1, 0], all_output_reprs_tsne[-1, 1]), xytext=(0, -23), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3'), fontsize=15)
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[-1]))
+# example 3
+random_index = 20000
+print("tokens: ", tokenizer.convert_ids_to_tokens(all_permutation_examples[random_index]))
+plt.annotate(" ", xy=(all_output_reprs_tsne[random_index, 0], all_output_reprs_tsne[random_index, 1]), xytext=(10,-10), textcoords='offset points',
+             arrowprops=dict(facecolor='black', shrink=0.05, width=0.5, headwidth=5, headlength=5, connectionstyle='arc3,rad=-1.35'), fontsize=15)
 
 # no sticks in x, y axis
 plt.xticks([])
@@ -604,6 +645,7 @@ plt.tight_layout()
 plt.savefig(f"saved_results/perturb_space_masked_rate_{input_text_base64}.png", dpi=300)
 plt.clf()
 
+exit()
 
 # plt.figure(figsize=(3, 3))
 # colors = ['619b8a', 'a1c181', 'fcca46', 'fe7f2d', '233d4d']

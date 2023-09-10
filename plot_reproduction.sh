@@ -1,6 +1,7 @@
 #!/bin/bash
 
 export CUDA_VISIBLE_DEVICES=1
+export TRANSFORMERS_OFFLINE=1
 
 if [ ! -d "saved_results" ]; then
     mkdir saved_results
