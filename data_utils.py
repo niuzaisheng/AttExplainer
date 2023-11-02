@@ -7,9 +7,7 @@ from datasets import load_dataset
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataloader import DataLoader
 
-import transformers
 from language_model import MyBertForSequenceClassification
-
 
 def get_token_word_position_map(batch, tokenizer):
     input_ids = batch["input_ids"].tolist()
@@ -29,8 +27,9 @@ def get_token_word_position_map(batch, tokenizer):
     return res
 
 
-def single_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name="text"):
+def single_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name="text", BatchTensorSetClass=None):
 
+    batch_size = len(features)
     first = features[0]
     batch = {}
 
@@ -56,16 +55,19 @@ def single_sentence_data_collator(features, tokenizer, num_labels, problem_type,
             else:
                 batch[k] = torch.tensor([f[k] for f in features])
 
-    batch["seq_length"] = torch.sum(batch["attention_mask"], dim=1).tolist()
+    batch["original_seq_length"] = torch.sum(batch["attention_mask"], dim=1).tolist()
     batch["token_word_position_map"] = token_word_position_map
     batch["special_tokens_mask"] = batch["special_tokens_mask"].bool()
     if "id" in first.keys():
         batch["id"] = [item["id"] for item in features]
+    
+    return BatchTensorSetClass(batch_size=batch_size, **batch)
 
-    return batch
 
+def double_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name1="text1", text_col_name2="text2", BatchTensorSetClass=None):
 
-def double_sentence_data_collator(features, tokenizer, num_labels, problem_type, text_col_name1="text1", text_col_name2="text2"):
+    batch_size = len(features)
+
     first = features[0]
     batch = {}
 
@@ -95,7 +97,7 @@ def double_sentence_data_collator(features, tokenizer, num_labels, problem_type,
     if "id" in first.keys():
         batch["id"] = [item["id"] for item in features]
 
-    return batch
+    return BatchTensorSetClass(batch_size=batch_size, **batch)
 
 
 # For processing eraser_esnli dataset

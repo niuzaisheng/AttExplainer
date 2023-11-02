@@ -27,6 +27,7 @@ input_feature_shape_dict = {
     "gradient": 2,
     "gradient_input": 2,
     "mixture": 2,
+    "hook": 3,
 }
 
 
@@ -260,15 +261,7 @@ def get_mixture_features(transformer_model, post_batch, original_pred_labels, se
     return extracted_features, model_outputs
 
 
-def batch_loss(model_output, y_ref, num_labels, device=None):
-    loss_fct = nn.CrossEntropyLoss(reduction="none")
-    loss = loss_fct(model_output.logits.view(-1, num_labels).to(device), y_ref.to(device).view(-1)).detach()
-    if device is not None:
-        loss = loss.to(device)
-    return loss
-
-
-def batch_initial_prob(model_output, y_ref, device=None):
+def batch_initial_prob(model_output, batch, device=None):
     """
         Note here that, in initial state: 
         - `y_ref` is refer to `golden_label`.
@@ -281,13 +274,24 @@ def batch_initial_prob(model_output, y_ref, device=None):
     y_pred = model_output.logits.detach().argmax(1).unsqueeze(-1)
     prob = torch.softmax(model_output.logits.detach(), dim=-1)
     prob = torch.gather(prob, 1, y_pred).reshape(-1)
+    y_ref = batch.golden_label
     y_ref = y_ref.to(device)
     accuracy = (y_ref == y_pred).float().reshape(-1)
     if device is not None:
         accuracy = accuracy.to(device)
         y_pred = y_pred.to(device)
         prob = prob.to(device)
-    return accuracy, y_pred, prob
+
+    batch.original_pred_labels = y_pred
+    batch.original_prob = prob
+    batch.original_acc = accuracy
+
+def batch_loss(model_output, y_ref, num_labels, device=None):
+    loss_fct = nn.CrossEntropyLoss(reduction="none")
+    loss = loss_fct(model_output.logits.view(-1, num_labels).to(device), y_ref.to(device).view(-1)).detach()
+    if device is not None:
+        loss = loss.to(device)
+    return loss
 
 
 def batch_accuracy(model_output, y_ref, device=None):
@@ -656,7 +660,6 @@ def get_most_free_gpu_index():
 
 
 class GameEnvironmentVariables(NamedTuple):
-
     rewards: Tensor
     if_done: Tensor
     if_success: Tensor
@@ -897,17 +900,11 @@ class TokenModifyTracker:
 
 
 
-def create_result_table(mode="test"):
+def create_result_table(table_columns, mode="test"):
     import wandb
-    table_columns = ["id", "done_step", "golden_label", "original_pred_label", "original_pred_prob",
-                     "post_pred_label", "post_pred_prob", "delta_prob", "masked_token_rate", "masked_token_num",
-                     "modified_index_order", "step_prob", "step_rewards", "step_delta_prob", "token_saliency",
-                     "step_masked_token_rate", "step_masked_token_num",
-                     "fidelity", "original_input_ids", "post_input_ids"]
     if mode == "train":
         table_columns = ["completed_steps", ] + table_columns
     return wandb.Table(columns=table_columns)
-
 
 def create_trackers(ids, original_seq_length, input_ids, token_word_position_map,
                     golden_labels, original_acc, original_pred_labels, original_prob, original_logits, original_loss,

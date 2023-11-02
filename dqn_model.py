@@ -11,6 +11,10 @@ from accelerate.utils import send_to_device
 import torch.optim as optim
 from per import Memory
 from torch.nn.utils.rnn import pad_sequence
+from unet.unet_model import UNet
+from einops import rearrange
+
+from data_structure import ItemTensorSet, BatchTensorSet
 
 
 class DQNNet(nn.Module):
@@ -149,41 +153,18 @@ class DQNNetMixture(nn.Module):
         return x.reshape(batch_size, max_seq_len)  # [B , seq]
     
 
-def gatherND(tensors: List[Dict[str, Tensor]], N=2) -> Dict[str, Tensor]:
-    """
-        Gathers tensors from list of dict into dict. 
-        N is the number of features dimensions to gather.
-    """
-    out_dict = {}
-    first = tensors[0]
-    batch_size = len(tensors)
-    for k in first.keys():
-        if "features" in k or "attentions" in k or "observation" in k:
-            max_seq_len = max([item[k].size(1) for item in tensors])  # 2D [batch_size x seq x seq] or 1D [batch_size x seq]
-            batch_features = []
-            for i, item in enumerate(tensors):
-                item_length = item[k].size(1)
-                if N == 2:
-                    temp = F.pad(item[k], (0, 0, 0, max_seq_len-item_length))
-                elif N == 1:
-                    temp = F.pad(item[k], (0, max_seq_len-item_length))
-                else:
-                    raise ValueError("Number of features dimensions for each example must be 1 or 2")
-                batch_features.append(temp)
-            batch_features = torch.stack(batch_features)
-            out_dict[k] = batch_features
-        else:
-            if k in ["if_success", "actions", "rewards"]:
-                out_dict[k] = torch.stack([item[k] for item in tensors])
-            elif k != "seq_length":
-                out_dict[k] = pad_sequence([item[k] for item in tensors], batch_first=True)
-    return out_dict
+class DQN_UNet(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        n_channels = n_classes = config.num_hidden_layers*config.num_attention_heads
+        self.unet4attention = UNet(n_channels, n_classes) # [ batch_size, layer_num * head_num, seq_length , seq_length]
 
-
-BufferItem = namedtuple("BufferItem", ("now_special_tokens_mask", "next_special_tokens_mask",
-                                       "now_features", "next_features",
-                                       "actions", "game_status", "next_game_status",
-                                       "seq_length", "rewards", "if_success"))
+    def forward(self, x, s):
+        batch_size, layer_num, head_num, seq_length , seq_length = x.size()
+        x = rearrange(x, 'b l h s1 s2 -> b (l h) s1 s2')
+        x = self.unet4attention(x)
+        x = rearrange(x, 'b (l h) s1 s2 -> b l h s1 s2', l=layer_num, h=head_num)
+        return x 
 
 
 class DQN(object):
@@ -198,6 +179,7 @@ class DQN(object):
         self.mask_token_id = mask_token_id
         self.input_feature_shape = input_feature_shape
         self.token_replacement_strategy = config.token_replacement_strategy
+        self.action_space = config.action_space
 
         ModelClass = None
         if config.features_type in ["gradient", "gradient_input"]:
@@ -208,6 +190,8 @@ class DQN(object):
             ModelClass = DQNNetEmbedding
         elif config.features_type == "mixture":
             ModelClass = DQNNetMixture
+        elif config.features_type == "hook":
+            ModelClass = DQN_UNet
         else:
             if input_feature_shape == 2:
                 ModelClass = DQNNet
@@ -320,54 +304,28 @@ class DQN(object):
         else:
             return post_batch, select_action, next_game_status, next_special_tokens_mask
 
-    def initial_action(self, batch, special_tokens_mask, seq_length, batch_max_seq_length, device):
-        batch_size = len(seq_length)
-        actions = torch.zeros((batch_size, batch_max_seq_length))
-        game_status = torch.ones((batch_size, batch_max_seq_length)) # 1 is visible to the model, 0 is invisible to the model.
-        for i, index in enumerate(seq_length):
-            game_status[i, index:] = 0
-        return actions.to(device), game_status.to(device)
-
-    def store_transition(self, batch_size, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, batch_seq_length, rewards, if_success):
+    def store_transition(self, batch:BatchTensorSet):
         if self.do_eval:
             raise Exception("Could not store transitions when do_eval!")
 
         self.eval_net.eval()
         with torch.no_grad():
-            q_loss = self.get_td_loss(batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, if_success).detach()
+            q_loss = self.get_td_loss(batch).detach()
 
-        now_special_tokens_mask = send_to_device(now_special_tokens_mask, "cpu")
-        next_special_tokens_mask = send_to_device(next_special_tokens_mask, "cpu")
-        now_features = send_to_device(now_features, "cpu")
-        next_features = send_to_device(next_features, "cpu")
-        game_status = send_to_device(game_status, "cpu")
-        next_game_status = send_to_device(next_game_status, "cpu")
-        actions = send_to_device(actions, "cpu")
-        rewards = send_to_device(rewards, "cpu")
-        if_success = send_to_device(if_success, "cpu")
-        q_loss = send_to_device(q_loss, "cpu").numpy()
+        batch.q_loss = q_loss
+        batch.send_to_device("cpu")
+        items = batch.split_into_items()
 
-        for i in range(batch_size):
-            new_item = BufferItem(now_special_tokens_mask=now_special_tokens_mask[i],
-                                  next_special_tokens_mask=next_special_tokens_mask[i],
-                                  now_features=now_features[i],
-                                  next_features=next_features[i],
-                                  actions=actions[i],
-                                  game_status=game_status[i],
-                                  next_game_status=next_game_status[i],
-                                  seq_length=batch_seq_length[i],
-                                  rewards=rewards[i],
-                                  if_success=if_success[i],
-                                  )
-            self.memory.add(q_loss[i], new_item)
+        q_loss = q_loss.numpy()
+        for i, item in enumerate(items):
+            self.memory.add(q_loss[i], item)
 
-    def get_td_loss(self, batch_seq_length, now_special_tokens_mask, next_special_tokens_mask, now_features, next_features, game_status, next_game_status, actions, rewards, if_success):
+    def get_td_loss(self, batch:BatchTensorSet):
         if self.do_eval:
             raise Exception("Could not get_td_loss when do_eval!")
-        if_success = if_success.float()
-        now_features = send_to_device(now_features, self.device)
-        game_status = send_to_device(game_status, self.device)
-        q_eval = self.eval_net(now_features, game_status)
+        
+        if_success = batch.if_success.float()
+        q_eval = self.eval_net(batch.now_features, game_status)
         q_eval = q_eval.gather(1, actions.unsqueeze(-1)).squeeze(-1)  # [B, seq, 1]  -> [B]
 
         with torch.no_grad():

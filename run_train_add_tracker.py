@@ -14,6 +14,7 @@ from transformers import AutoTokenizer, set_seed
 
 from data_utils import get_dataloader_and_model, get_dataset_config
 from dqn_model import DQN
+from language_model import MyBertForSequenceClassification, MyBertSelfAttention
 from utils import *
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def parse_args():
     parser.add_argument("--features_type", type=str, default="statistical_bin",
                         choices=["const", "random", "input_ids", "original_embedding",
                                  "statistical_bin", "effective_information",
-                                 "gradient", "gradient_input", "mixture"])
+                                 "gradient", "gradient_input", "mixture", "hook"])
     parser.add_argument("--done_threshold", type=float, default=0.8)
     parser.add_argument("--do_pre_deletion", action="store_true", default=False, help="Pre-deletion of misclassified samples")
     parser.add_argument("--token_replacement_strategy", type=str, default="mask", choices=["mask", "delete"])
@@ -183,6 +184,46 @@ def get_rewards(original_seq_length=None,
         delta_loss=delta_loss,
     )
 
+class AttentionLayerHookManager:
+    def __init__(self, model:MyBertForSequenceClassification):
+        
+        self._module_dict = {} # module instance -> layer index
+        self.saver = [] # observation of attention scores
+        self.attention_perturbation = None # perturbation of attention scores, 
+    
+        for index, layer in enumerate(model.bert.encoder.layer):
+            self._module_dict[layer.attention.self] = index
+            layer.attention.self.register_forward_hook(self)
+
+    def __call__(self, module, input, output):
+        if not isinstance(module, MyBertSelfAttention):
+            raise Exception("module is not MyBertSelfAttention")
+
+        if isinstance(output, tuple):
+            # output_hidden_states = output[0] # context_layer hidden_states
+            attention_output = output[1] # attention_probs
+            attention_output = attention_output.detach()
+            self.saver.append(attention_output)
+        else:
+            raise Exception("output is not a tuple of (hidden_states, attention_output, ...))")
+
+    def set_attention_perturbation(self, attention_perturbation):
+        if self.attention_perturbation is not None:
+            for module, layer_index in self._module_dict.items():
+                module.attention_perturbation = attention_perturbation[layer_index]
+
+    def gather_saver_to_features(self):
+        features = torch.cat(self.saver, dim=0) # layer_num * batch_size * head_num * seq_length * seq_length
+        features = features.transpose(0, 1) # batch_size * layer_num * head_num * seq_length * seq_length
+        self.saver = []
+        return features
+
+    def detach_hook_from_model(self, model):
+        for layer in model.bert.encoder.layer:
+            layer.attention.self.remove_forward_hook(self)
+        for module, layer_index in self._module_dict.items():
+                module.attention_perturbation = None
+
 
 def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bins_num, lm_device, dqn_device, features_type):
 
@@ -195,6 +236,11 @@ def one_step(transformer_model, original_pred_labels, post_batch, seq_length, bi
         extracted_features, post_outputs = use_original_embedding_as_features(transformer_model, post_batch)
     elif features_type == "mixture":
         extracted_features, post_outputs = get_mixture_features(transformer_model, post_batch, original_pred_labels, seq_length, bins_num)
+    elif features_type == "hook":
+        post_outputs = transformer_model(**post_batch, output_attentions=True)
+        extracted_features = saver[0]
+        print(extracted_features.shape)
+
     else:
         with torch.no_grad():
             post_outputs = transformer_model(**post_batch, output_attentions=True)
