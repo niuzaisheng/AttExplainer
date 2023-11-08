@@ -164,7 +164,7 @@ class DQN_UNet(nn.Module):
         x = rearrange(x, 'b l h s1 s2 -> b (l h) s1 s2')
         x = self.unet4attention(x)
         x = rearrange(x, 'b (l h) s1 s2 -> b l h s1 s2', l=layer_num, h=head_num)
-        return x 
+        return x
 
 
 class DQN(object):
